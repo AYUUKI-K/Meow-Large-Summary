@@ -101,11 +101,12 @@ node --check index.js
 node tests/ui-smoke.mjs 8786
 ```
 
-使用已有 Playwright CLI 打开上述本地模拟页后，可执行触屏入口回归（会创建并关闭独立的移动端浏览器 context）：
+使用已有 Playwright CLI 打开上述本地模拟页后，可执行触屏入口及浮窗遮挡回归（会创建并关闭独立的浏览器 context）：
 
 ```powershell
 playwright-cli open http://127.0.0.1:8786 --browser chrome
 playwright-cli run-code --filename tests/floating-panel-touch-browser.js
+playwright-cli run-code --filename tests/floating-panel-layer-browser.js
 ```
 
 模拟页可使用 `?host=1.14` 测试旧世界书接口，或 `?host=tauri` 测试宿主标记与缺少新版 AbortSignal 静态方法的场景。它们不是真实酒馆客户端。固定源码核对可单独运行：

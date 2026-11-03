@@ -18,7 +18,7 @@ import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.2.18';
+const EXTENSION_VERSION = '1.2.19';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 

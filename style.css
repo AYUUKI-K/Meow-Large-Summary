@@ -230,7 +230,10 @@
 .als-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .als-manage .als-actions { margin-top: 12px; }
 body.als-send-locked :is(#send_but, #option_continue, #option_regenerate, .swipe_left, .swipe_right) { opacity: .45; cursor: wait; }
-.als-floating-shell { position: fixed; z-index: 3001; right: 20px; bottom: 88px; width: auto; margin: 0; container-type: normal; }
+/* Body-mounted floating UI stays above host drawers/menus and custom theme layers.
+   Native modal dialogs remain above it in the browser's top layer. Embedded panels
+   do not receive these stacking levels. */
+.als-floating-shell { position: fixed; z-index: 2147483647; right: 20px; bottom: 88px; width: auto; margin: 0; container-type: normal; }
 .als-floating-shell[hidden] { display: none !important; }
 .als-floating-header .als-icon-button { flex: 0 0 auto; font-size: 20px; }
 .als-floating-header .als-floating-close { flex: 0 0 auto; }
@@ -261,7 +264,7 @@ body.als-send-locked :is(#send_but, #option_continue, #option_regenerate, .swipe
 .als-floating-shell:is([data-dock="left"], [data-dock="right"]) :is(.als-launcher-mascot, .als-launcher-mode, .als-launcher-caption > span) { display: none; }
 .als-floating-shell:is([data-dock="left"], [data-dock="right"]) .als-launcher-count { font-size: 14px; font-weight: 600; color: var(--als-ink); white-space: nowrap; }
 .als-float-launcher:focus-visible { outline: 2px solid var(--als-bookmark); outline-offset: 2px; }
-.als-settings.als-floating { position: fixed; z-index: 3000; display: flex; flex-direction: column; margin: 0; padding: 0; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); min-width: min(300px, calc(100vw - 24px)); min-height: min(280px, calc(100dvh - 24px)); border: 1px solid var(--als-control-line); border-radius: 14px; background: var(--als-paper); color: var(--als-ink); overflow: hidden; resize: both; }
+.als-settings.als-floating { position: fixed; z-index: 2147483646; display: flex; flex-direction: column; margin: 0; padding: 0; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); min-width: min(300px, calc(100vw - 24px)); min-height: min(280px, calc(100dvh - 24px)); border: 1px solid var(--als-control-line); border-radius: 14px; background: var(--als-paper); color: var(--als-ink); overflow: hidden; resize: both; }
 .als-floating-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 4px; padding: 4px 8px 8px; border-bottom: 1px solid var(--als-rule); flex-shrink: 0; }
 .als-floating-title { flex: 1; min-width: 0; }
 .als-floating-modes { padding: 0 4px; }
