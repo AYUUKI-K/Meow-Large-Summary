@@ -13,6 +13,17 @@ export function summaryResponseError(status, body = '') {
     }
     if (code === 429) return new Error('接口请求过于频繁或额度不足（HTTP 429），请稍后重试或检查额度。');
     if ([401, 403].includes(code)) return new Error(`接口拒绝访问（HTTP ${code}），请检查连接权限与密钥。`);
+    if (code === 400) {
+        try {
+            const data = JSON.parse(body);
+            const detail = typeof data?.error === 'string' ? data.error : data?.error?.message ?? data?.message;
+            if (typeof detail === 'string' && detail.trim()) {
+                const safe = detail.trim().replace(/[<>]/g, char => char === '<' ? '＜' : '＞')
+                    .replace(/Bearer\s+[^\s"']+|\bsk-[A-Za-z0-9_-]{8,}/gi, '[已隐藏密钥]').slice(0, 500);
+                return new Error(`总结接口返回 HTTP 400：${safe}`);
+            }
+        } catch { /* Do not expose HTML proxy pages or an arbitrary response body. */ }
+    }
     return new Error(code >= 400 ? `总结接口返回 HTTP ${code}，请检查服务状态。`
         : '总结接口返回错误或无法识别的响应，请检查酒馆后台日志。');
 }

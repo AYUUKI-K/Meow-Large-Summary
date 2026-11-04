@@ -93,6 +93,9 @@ if(legacy)delete context.getWorldInfoNames;
 window.SillyTavern={getContext:()=>context,libs:{DOMPurify:window.DOMPurify,showdown:window.showdown}};
 window.toastr=Object.fromEntries(['info','success','warning','error'].map(kind=>[kind,(text)=>{document.querySelector('#notice').textContent=text;return{text}}]));window.toastr.clear=()=>{};
 document.querySelector('#theme').onclick=()=>document.body.classList.toggle('light');
+const deleteLast=document.createElement('button');deleteLast.type='button';deleteLast.textContent='删除末层';
+deleteLast.onclick=async()=>{context.chat.pop();persist();await eventSource.emit(eventTypes.MESSAGE_DELETED,context.chat.length);};
+document.querySelector('#fixture-controls').append(deleteLast);
 document.querySelector('#fixture-hide').onchange=event=>{window.smoke.failHide=event.target.checked};
 for(const [key,label] of [['failBudget','模拟世界书预算不足'],['truncated','模拟模型回复截断'],['trimSource','模拟上下文裁剪']]){
  const row=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.id='fixture-'+key;

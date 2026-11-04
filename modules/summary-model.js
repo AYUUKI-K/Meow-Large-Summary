@@ -29,6 +29,26 @@ export function summarySourceChanged(chat, metadata) {
     return historyDigest(chat, metadata.sourceEnd) !== metadata.sourceDigest;
 }
 
+// A user's explicit choice to keep old memory does not repair its provenance.
+// Bind the choice to this archive, summary revision and changed source prefix.
+export function sourceChangeAccepted(chat, metadata) {
+    const choice = metadata?.sourceChangeAcknowledgement;
+    return Boolean(choice && typeof metadata.archiveId === 'string' && metadata.archiveId
+        && choice.archiveId === metadata.archiveId
+        && choice.summaryRound === metadata.round
+        && choice.summarySourceEnd === metadata.sourceEnd && choice.summarySourceDigest === metadata.sourceDigest
+        && Number.isInteger(choice.end) && choice.end >= -1 && choice.end < chat.length
+        && typeof choice.digest === 'string' && choice.digest
+        && choice.digest === historyDigest(chat, choice.end));
+}
+
+export function memoryUpdateCheckpoint(records, chat) {
+    const valid = branchRecords(records, chat);
+    const last = valid.at(-1);
+    const content = combineRecords(valid).trim();
+    return last && content ? { content, sourceEnd: last.sourceEnd, round: last.round } : null;
+}
+
 export function activeRecords(records) {
     return records.filter(record => !record.undone).sort((a, b) => a.round - b.round);
 }
@@ -110,8 +130,8 @@ export function automaticStatus(settings, archive, journal, { hasChat, busy, has
     if (!settings.enabled) return { label: '已停用', reason: '插件已关闭，不会自动总结。' };
     if (!hasChat) return { label: '等待聊天', reason: '请先打开单人聊天存档。' };
     if (busy) return { label: '处理中', reason: '当前操作结束后更新自动总结状态。' };
-    if (archive?.sourceChanged) return { label: '记忆待更新', reason: '原文已改变，请先从原文重建。' };
-    if (archive?.branch?.needsRebuild) return { label: '等待重建', reason: '当前分支需要从原文重建。' };
+    if (archive?.sourceChanged) return { label: '记忆待确认', reason: '原文已改变，可更新记忆，或选择保留现有总结。' };
+    if (archive?.branch?.needsRebuild) return { label: '等待更新', reason: '当前分支需要确认可复用的记忆，可在记录中查看。' };
     if (archive?.pendingSummarySave) return { label: '等待保存确认', reason: '请刷新世界书状态，确认上次总结是否已保存。' };
     if (journal?.combinedRestorePending && !journal.messagesRestored) return { label: '等待恢复原文', reason: '总结已撤销，请继续完成本次原文恢复。' };
     if (journal?.phase === 'saved' && !journal.messagesRestored) return { label: '等待隐藏', reason: '总结已保存，请只重试隐藏，无需重新生成。' };

@@ -11,7 +11,7 @@ test('automatic status explains each pause without hiding manual mode or a highe
     const settings = { enabled: true, autoEnabled: true, threshold: 60000 };
     const info = { hasChat: true, busy: false, hasWork: true, chatLength: 30 };
     for (const [archive, journal, label] of [
-        [{ sourceChanged: true }, null, '记忆待更新'], [{ branch: { needsRebuild: true } }, null, '等待重建'],
+        [{ sourceChanged: true }, null, '记忆待确认'], [{ branch: { needsRebuild: true } }, null, '等待更新'],
         [{ pendingSummarySave: true }, null, '等待保存确认'], [{}, { phase: 'saved' }, '等待隐藏'],
         [{ coverageBlocked: true }, null, '输入检查未通过'], [{ undoAtLength: 30 }, null, '等待新消息'],
         [{ summaryStillOverThreshold: true }, null, '自动已暂停'], [{}, { combinedRestorePending: true }, '等待恢复原文'],

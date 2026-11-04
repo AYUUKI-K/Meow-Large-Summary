@@ -313,7 +313,7 @@ for (const scenario of ['full', 'trimmed', 'transformed', 'missing-event', 'miss
 }
 
 for (const change of ['edit', 'delete', 'swipe']) {
-    test(`historical ${change} pauses summaries and rebuilding clears stale state`, async () => {
+    test(`historical ${change} offers a choice and refuses full-history rebuilding without a checkpoint`, async () => {
         const f = await fixture({ autoEnabled: false });
         f.prepareSummary();
         await f.api.runLargeSummary({ manual: true });
@@ -321,32 +321,124 @@ for (const change of ['edit', 'delete', 'swipe']) {
         if (change === 'delete') f.context.chat.splice(1, 1);
         if (change === 'swipe') f.context.chat[1].swipe_id = 1;
         f.api.evaluate('onChatContentChanged()');
+        const book = f.sandbox.__fixtures.book();
         assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
-        assert.equal(f.controls.get('.als-rebuild').hidden, false);
         assert.equal(f.controls.get('.als-compact').disabled, true);
         const writes = f.writes.length;
         assert.equal(await f.api.runLargeSummary({ operation: 'compact' }), undefined);
+        f.api.evaluate('requestMainApiSummary = async () => { throw new Error("must not call model"); };');
+        assert.equal(await f.api.runLargeSummary({ operation: 'rebuild' }), false);
         assert.equal(f.writes.length, writes);
-        assert.equal(await f.api.runLargeSummary({ operation: 'rebuild' }), true);
-        assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, undefined);
-        assert.equal(f.controls.get('.als-rebuild').hidden, true);
-        f.context.chat.push({ mes: '新剧情' });
-        f.api.evaluate('onChatContentChanged()');
-        assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, undefined);
+        assert.deepEqual(f.sandbox.__fixtures.book(), book);
+        assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
+        assert.ok(f.notices.some(n => String(n.args[0]).includes('没有可复用的有效旧总结')));
     });
 }
 
-test('reloading reconciles old source digests and undoing a rebuild restores stale warning', async () => {
-    const f = await fixture({ autoEnabled: false });
+async function prepareChangedMemory(f) {
     f.prepareSummary();
     await f.api.runLargeSummary({ manual: true });
-    f.context.chat[0].mes = '修改旧事';
+    f.context.chat.push(...Array.from({ length: 25 }, (_, i) => ({ mes: `后续剧情 ${i}`, name: '角色 A' })));
+    await f.api.runLargeSummary({ manual: true });
+    f.context.chat[40].mes = '修改旧事';
+    f.api.evaluate('onChatContentChanged()');
+}
+
+test('reloading reconciles old source digests and undoing a checkpoint update restores the warning', async () => {
+    const f = await fixture({ autoEnabled: false });
+    await prepareChangedMemory(f);
     delete f.context.chatMetadata.auto_large_summary.sourceDigest;
     f.api.evaluate('reconcileArchiveMetadata(getContext().chatMetadata.auto_large_summary, currentSummaryEntry)');
     assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
-    await f.api.runLargeSummary({ operation: 'rebuild' });
+    assert.equal(await f.api.runLargeSummary({ operation: 'rebuild' }), true);
     await f.api.evaluate('recoverLatestSummary("undo")');
     assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
+});
+
+test('memory update for a long hidden chat sends only a valid checkpoint and the changed suffix', async () => {
+    const f = await fixture({ autoEnabled: false, keepRecent: 14 });
+    f.prepareSummary();
+    f.context.chat = Array.from({ length: 1100 }, (_, i) => ({ mes: `初始原文 ${i}`, name: '角色 A' }));
+    f.api.evaluate('requestMainApiSummary = async () => "有效的旧记忆";');
+    await f.api.runLargeSummary({ manual: true });
+    f.context.chat.push(...Array.from({ length: 85 }, (_, i) => ({ mes: `后续原文 ${i}`, name: '角色 A' })));
+    f.api.evaluate('requestMainApiSummary = async () => "含末尾事件的总结";');
+    await f.api.runLargeSummary({ manual: true });
+    f.context.chat.pop();
+    f.api.evaluate(`onChatContentChanged(); requestMainApiSummary = async (_ctx, prompt, options) => {
+        __fixtures.updatePrompt = prompt; __fixtures.updateOptions = options; return '修正后的完整记忆';
+    };`);
+    assert.equal(await f.api.runLargeSummary({ operation: 'rebuild' }), true);
+    assert.ok(f.sandbox.__fixtures.updatePrompt.includes('有效的旧记忆'));
+    assert.ok(f.sandbox.__fixtures.updatePrompt.includes('后续原文 83'));
+    assert.ok(!f.sandbox.__fixtures.updatePrompt.includes('初始原文 0'));
+    assert.ok(!f.sandbox.__fixtures.updatePrompt.includes('后续原文 84'));
+    assert.ok(!f.sandbox.__fixtures.updatePrompt.includes('含末尾事件的总结'));
+    assert.equal(f.sandbox.__fixtures.updateOptions.sourceOnly, true);
+    assert.equal(bookEntry(f).content, '修正后的完整记忆');
+    assert.equal(bookEntry(f).extensions.auto_large_summary.records.length, 3);
+    assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, undefined);
+});
+
+test('deleting floor 99 can restore a valid floor-98 summary without calling a model', async () => {
+    const f = await fixture({ autoEnabled: false });
+    f.prepareSummary();
+    f.context.chat = Array.from({ length: 99 }, (_, i) => ({ mes: `原文 ${i}` }));
+    f.api.evaluate('requestMainApiSummary = async () => "到98层的有效总结";');
+    await f.api.runLargeSummary({ manual: true });
+    f.context.chat.push({ mes: '将删除的99层' });
+    f.api.evaluate('requestMainApiSummary = async () => "到99层的旧总结";');
+    await f.api.runLargeSummary({ manual: true });
+    f.context.chat.pop();
+    f.api.evaluate(`onChatContentChanged(); requestMainApiSummary = async () => { throw new Error('不应调用模型'); };`);
+    assert.equal(await f.api.runLargeSummary({ operation: 'rebuild' }), true);
+    assert.equal(bookEntry(f).content, '到98层的有效总结');
+    assert.equal(bookEntry(f).extensions.auto_large_summary.sourceEnd, 98);
+});
+
+for (const choice of ['keep', 'cancel', 'save-error']) {
+    test(`keep-memory choice ${choice} preserves world book, provenance and visibility`, async () => {
+        const f = await fixture();
+        await prepareChangedMemory(f);
+        const book = f.sandbox.__fixtures.book();
+        const sourceDigest = f.context.chatMetadata.auto_large_summary.sourceDigest;
+        const commands = [...f.executed];
+        const visible = f.context.chat.map(message => message.is_system);
+        f.api.evaluate('requestMainApiSummary = async () => { throw new Error("must not call model"); };');
+        if (choice === 'cancel') f.sandbox.window.confirm = () => false;
+        if (choice === 'save-error') f.context.saveMetadata = async () => { throw new Error('save failed'); };
+        assert.equal(await f.api.evaluate('retainCurrentMemory()'), choice === 'keep');
+        assert.deepEqual(f.sandbox.__fixtures.book(), book);
+        assert.deepEqual(f.executed, commands);
+        assert.deepEqual(f.context.chat.map(message => message.is_system), visible);
+        assert.equal(f.context.chatMetadata.auto_large_summary.sourceDigest, sourceDigest);
+        assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, choice === 'keep' ? undefined : true);
+        if (choice === 'keep') {
+            f.api.evaluate('reconcileArchiveMetadata(getContext().chatMetadata.auto_large_summary,currentSummaryEntry)');
+            assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, undefined, 'reloading keeps the explicit choice');
+            assert.equal(f.api.evaluate('canSummarize(getContext(),true)'), true);
+            f.context.chat.push({ mes: '继续聊天' });
+            f.api.evaluate('onChatContentChanged()');
+            assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, undefined);
+            f.context.chat[40].mes = '再次修改';
+            f.api.evaluate('onChatContentChanged()');
+            assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
+            assert.equal(f.context.chatMetadata.auto_large_summary.sourceChangeAcknowledgement, undefined);
+        }
+        assert.equal(f.api.state().sendLockDepth, 0);
+    });
+}
+
+test('ordinary summaries can continue after keeping memory and clear the old acknowledgement', async () => {
+    const f = await fixture();
+    await prepareChangedMemory(f);
+    assert.equal(await f.api.evaluate('retainCurrentMemory()'), true);
+    f.context.chat.push(...Array.from({ length: 25 }, (_, i) => ({ mes: `接受后的新剧情 ${i}` })));
+    f.api.evaluate('onChatContentChanged(); requestMainApiSummary = async () => "新的剧情总结";');
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+    assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, undefined);
+    assert.equal(f.context.chatMetadata.auto_large_summary.sourceChangeAcknowledgement, undefined);
+    assert.ok(bookEntry(f).content.includes('新的剧情总结'));
 });
 
 for (const empty of ['deleted', 'blank']) {
@@ -372,9 +464,8 @@ for (const empty of ['deleted', 'blank']) {
 
 test('rebuild keeps stale-source warning if original text changes while its result is being saved', async () => {
     const f = await fixture({ autoEnabled: false });
-    f.prepareSummary();
-    await f.api.runLargeSummary({ manual: true });
-    f.context.chat[0].mes = '第一次修订';
+    await prepareChangedMemory(f);
+    f.context.chat[40].mes = '第一次修订';
     f.api.evaluate('onChatContentChanged(); requestMainApiSummary = async () => "重建结果";');
     const commands = [...f.executed];
     const save = f.context.saveWorldInfo.bind(f.context);
@@ -384,7 +475,7 @@ test('rebuild keeps stale-source warning if original text changes while its resu
         const operation = data.entries[0]?.extensions?.auto_large_summary?.lastOperation;
         if (!changed && operation?.operation === 'rebuild' && operation.phase === 'saved') {
             changed = true;
-            f.context.chat[0].mes = '保存期间再次修订';
+            f.context.chat[40].mes = '保存期间再次修订';
             f.api.evaluate('onChatContentChanged()');
         }
     };
@@ -400,9 +491,8 @@ test('rebuild keeps stale-source warning if original text changes while its resu
 for (const failure of ['model-error', 'cancelled', 'source-edited']) {
     test(`rebuild ${failure} keeps previous memory and visibility intact`, async () => {
         const f = await fixture({ autoEnabled: false });
-        f.prepareSummary();
-        await f.api.runLargeSummary({ manual: true });
-        f.context.chat[0].mes = '重建前修订';
+        await prepareChangedMemory(f);
+        f.context.chat[40].mes = '重建前修订';
         f.api.evaluate('onChatContentChanged()');
         const book = f.sandbox.__fixtures.book();
         const commands = [...f.executed];
@@ -412,7 +502,7 @@ for (const failure of ['model-error', 'cancelled', 'source-edited']) {
             if (__fixtures.rebuildFailure === 'model-error') throw new Error('模拟 API 失败');
             if (__fixtures.rebuildFailure === 'cancelled') cancelCurrentTask();
             if (__fixtures.rebuildFailure === 'source-edited') {
-                __fixtures.context.chat[0].mes = '生成期间再次修订';
+                __fixtures.context.chat[40].mes = '生成期间再次修订';
                 onChatContentChanged();
             }
             return '不应保存的重建结果';
@@ -448,7 +538,7 @@ async function fixture(savedSettings = {}, storageData = new Map(), extensionFol
     const controls = new Map();
     const control = () => ({ disabled: false, getAttribute: () => null, setAttribute() {}, removeAttribute() {} });
     for (const selector of ['.als-status', '.als-settings-state', '.als-instruction-depth-field', '.als-instruction-role-field', '.als-delete-round', '.als-history-select', '.als-prompt', '.als-prompt-mode', '.als-prompt-style', '.als-settings-mode', '.als-settings-style', '.als-mode-description', '.als-prompt-state', '.als-model-status', '.als-model-fetch']) controls.set(selector, control());
-    for (const selector of ['.als-enabled', '.als-auto-enabled', '.als-threshold', '.als-keep', '.als-book', '.als-depth', '.als-instruction-position', '.als-instruction-depth', '.als-instruction-role', '.als-api-mode', '.als-secondary-url', '.als-secondary-key', '.als-secondary-model', '.als-secondary-settings', '.als-preview-box', '.als-action-context', '.als-last-operation', '.als-task-state', '.als-cancel', '.als-compact', '.als-rebuild', '.als-retry-hide', '.als-restore', '.als-undo']) controls.set(selector, control());
+    for (const selector of ['.als-enabled', '.als-auto-enabled', '.als-threshold', '.als-keep', '.als-book', '.als-depth', '.als-instruction-position', '.als-instruction-depth', '.als-instruction-role', '.als-api-mode', '.als-secondary-url', '.als-secondary-key', '.als-secondary-model', '.als-secondary-settings', '.als-retain-memory', '.als-preview-box', '.als-action-context', '.als-last-operation', '.als-task-state', '.als-cancel', '.als-compact', '.als-rebuild', '.als-retry-hide', '.als-restore', '.als-undo']) controls.set(selector, control());
     const handlers = new Map();
     for (const selector of ['.als-stream-summary', '.als-live-result', '.als-live-text', '.als-incomplete-result', '.als-incomplete-text', '.als-incomplete-reason']) controls.set(selector, control());
     controls.get('.als-stream-summary').type = 'checkbox';
@@ -2758,19 +2848,16 @@ test('a fresh branch receives its own identity and never inherits summaries exte
     assert.equal(info.archive.branch.needsRebuild, true);
     assert.equal(info.archive.lastSummarizedThrough, -1);
     assert.equal(f.api.evaluate('canSummarize(getContext(), true)'), false);
-    f.api.evaluate(`requestMainApiSummary = async (_context, prompt, options) => {
-        if (!options.sourceOnly || !prompt.includes('楼层 0') || prompt.includes('楼层 29')) throw new Error('wrong branch source');
-        return '分支独立剧情';
-    };`);
-    await f.api.runLargeSummary({ operation: 'rebuild' });
-    assert.equal(bookEntry(f).content, '分支独立剧情');
-    assert.equal(info.archive.branch.needsRebuild, false);
-    assert.equal(bookEntry(f).extensions.auto_large_summary.coveredTo, -1);
-    assert.equal(bookEntry(f).extensions.auto_large_summary.lastOperation.changes.length, 0);
-    const parentAfter = f.writes.at(-1).data.entries[parent.uid];
+    const writes = f.writes.length;
+    f.api.evaluate(`requestMainApiSummary = async () => { __fixtures.branchModelCalled = true; return '不应生成'; };`);
+    assert.equal(await f.api.runLargeSummary({ operation: 'rebuild' }), false);
+    assert.equal(f.sandbox.__fixtures.branchModelCalled, undefined);
+    assert.equal(bookEntry(f), undefined);
+    assert.equal(info.archive.branch.needsRebuild, true);
+    assert.equal(f.writes.length, writes);
+    const parentAfter = f.sandbox.__fixtures.book().entries[parent.uid];
     assert.equal(parentAfter.content, parent.content);
     assert.deepEqual(parentAfter.extensions, parent.extensions);
-    assert.equal(Object.keys(f.writes.at(-1).data.entries).length, 2);
 });
 
 test('branch inheritance uses actual source endpoint, not the earlier hide boundary', async () => {

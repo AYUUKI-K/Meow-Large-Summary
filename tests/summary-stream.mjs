@@ -124,6 +124,14 @@ test('524 HTML is summarized without exposing raw HTML', () => {
     assert.doesNotMatch(error.message, /title|relay/);
 });
 
+test('HTTP 400 retains the provider reason without interpreting HTML or exposing a bearer key', () => {
+    const error = summaryResponseError(400, JSON.stringify({ error: { message: 'maximum context length exceeded' } }));
+    assert.match(error.message, /HTTP 400.*maximum context length exceeded/);
+    const hostile = summaryResponseError(400, JSON.stringify({ message: '<img src=x onerror=alert(1)> Bearer sk-secret-key123' }));
+    assert.doesNotMatch(hostile.message, /<|sk-secret-key123/);
+    assert.doesNotMatch(summaryResponseError(400, '<html>proxy failure</html>').message, /html|proxy/);
+});
+
 test('progress distinguishes waiting, thinking, received text, and idle time', () => {
     const task = { stage: 'generating', startedAt: Date.now() - 22000, stream: { enabled: true, chars: 0, startedAt: Date.now() - 21000 } };
     assert.match(taskLabel(task), /等待响应.*未收到新数据/);

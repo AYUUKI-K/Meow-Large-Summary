@@ -52,8 +52,9 @@ export function settingsMarkup(version) {
               <button type="button" class="menu_button als-primary als-run"><span>立即总结并隐藏旧消息</span>${uiIcon('arrow')}</button>
               <button type="button" class="menu_button als-compact">仅合并已有总结</button>
               <p class="als-action-hint als-muted">仅合并只整理已有总结，不改变消息可见状态。</p>
-              <p class="als-help als-source-warning" role="status" hidden>记忆待更新：总结之后修改、删除或切换了已覆盖原文。重建成功前旧总结继续保留；自动总结已暂停。</p>
-              <button type="button" class="menu_button als-rebuild" hidden>从分支原文重建（含隐藏消息）</button>
+              <p class="als-help als-source-warning" role="status" hidden>原文已改变，可选择更新记忆或保留现有总结继续使用。</p>
+              <button type="button" class="menu_button als-rebuild" hidden>更新记忆（从有效总结接续）</button>
+              <button type="button" class="menu_button als-retain-memory" hidden>不重构，保留现有总结</button>
             </section>
             <section class="als-last-section"><div class="als-section-heading"><h4>最近一次记忆</h4><button type="button" class="als-text-button als-view-current">查看正文 ${uiIcon('arrow')}</button></div><p class="als-summary-result" role="status"></p><p class="als-token-comparison als-help"></p><p class="als-last-operation als-muted">当前存档暂无总结。</p></section>
             <details class="als-incomplete-result als-disclosure" hidden><summary>未完成的总结草稿</summary><div class="als-disclosure-body"><p class="als-incomplete-reason als-help"></p><p class="als-draft-state als-help" role="status"></p><textarea class="text_pole als-incomplete-text" rows="8" readonly aria-label="未完成的总结正文"></textarea><div class="als-actions"><button type="button" class="menu_button als-incomplete-copy">复制未完成结果</button><button type="button" class="menu_button als-incomplete-download">下载未完成正文</button><button type="button" class="menu_button als-incomplete-retry" hidden>重试本地存储</button><button type="button" class="als-text-button als-incomplete-delete">删除这份草稿</button></div></div></details>

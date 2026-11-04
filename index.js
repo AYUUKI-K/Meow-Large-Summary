@@ -3,7 +3,7 @@ import { settingsMarkup, uiIcon } from './modules/settings-ui.js';
 import { renderSummaryReader } from './modules/summary-reader.js';
 import { mountFloatingPanel } from './modules/floating-panel.js';
 import { nativeScript, chatCompletionApi, tokenizerApi, regexApi, worldInfoNames, inputTokenBudget } from './modules/host-api.js';
-import { activeRecords, archiveTransition, branchRecords, combineRecords, consecutiveRanges, entryRevision, historyDigest, messageFingerprint, recoveryMatches, sourceDescription, summarySourceChanged, summaryScope, summaryResultText, automaticStatus, tokenComparisonText, textDigest, visibilityChanges } from './modules/summary-model.js';
+import { activeRecords, archiveTransition, branchRecords, combineRecords, consecutiveRanges, entryRevision, historyDigest, memoryUpdateCheckpoint, messageFingerprint, recoveryMatches, sourceChangeAccepted, sourceDescription, summarySourceChanged, summaryScope, summaryResultText, automaticStatus, tokenComparisonText, textDigest, visibilityChanges } from './modules/summary-model.js';
 import { createCoveragePlan, captureCoverageSources, missingCoverage, thresholdBudgetWarning } from './modules/source-coverage.js';
 import { readWorldBook, saveVerifiedBook } from './modules/world-book.js';
 import { setTaskStage, taskLabel } from './modules/task-state.js';
@@ -18,7 +18,7 @@ import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.2.20';
+const EXTENSION_VERSION = '1.2.21';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -35,7 +35,7 @@ let requestPreview = false;
 let thresholdCheckInProgress = false;
 let sendLockDepth = 0;
 const lockedControls = new Map();
-const SEND_CONTROL_SELECTOR = '#send_but, #option_continue, #option_regenerate, .swipe_left, .swipe_right, .als-settings input:not(.als-enabled), .als-settings .als-mode, .als-settings .als-style, .als-settings .als-api-mode, .als-model-select, .als-model-fetch, .als-settings .als-instruction-position, .als-settings .als-instruction-role, .als-settings .als-prompt, .als-run, .als-compact, .als-rebuild, .als-retry-hide, .als-restore, .als-undo, .als-undo-restore, .als-settings-save, .als-settings-reset, .als-prompt-save, .als-prompt-use, .als-edit-running, .als-next-action, .als-prompt-reset, .als-delete-archive, .als-delete-round, .als-update-apply';
+const SEND_CONTROL_SELECTOR = '#send_but, #option_continue, #option_regenerate, .swipe_left, .swipe_right, .als-settings input:not(.als-enabled), .als-settings .als-mode, .als-settings .als-style, .als-settings .als-api-mode, .als-model-select, .als-model-fetch, .als-settings .als-instruction-position, .als-settings .als-instruction-role, .als-settings .als-prompt, .als-run, .als-compact, .als-rebuild, .als-retain-memory, .als-retry-hide, .als-restore, .als-undo, .als-undo-restore, .als-settings-save, .als-settings-reset, .als-prompt-save, .als-prompt-use, .als-edit-running, .als-next-action, .als-prompt-reset, .als-delete-archive, .als-delete-round, .als-update-apply';
 const worldBookPreparations = new Map();
 const MODE_LABELS = { incremental: '多次大总结', merged: '合并大总结' };
 const DIRECTORY_PAGE_SIZE = 8;
@@ -1208,6 +1208,7 @@ async function ensureArchive(context = getContext()) {
         archive.sourceEnd = null;
         delete archive.sourceDigest;
         delete archive.sourceChanged;
+        delete archive.sourceChangeAcknowledgement;
         delete archive.coverageBlocked;
         archive.round = 0;
         archive.autoTriggerArmed = true;
@@ -1224,6 +1225,7 @@ async function ensureArchive(context = getContext()) {
         archive.summaryStillOverThreshold = false;
         delete archive.sourceDigest;
         delete archive.sourceChanged;
+        delete archive.sourceChangeAcknowledgement;
         delete archive.coverageBlocked;
         changed = true;
     }
@@ -1529,8 +1531,7 @@ function reconcileArchiveMetadata(archive, entry) {
     const meta = entryMetadata(entry);
     Object.assign(archive, { lastSummarizedThrough: meta?.coveredTo ?? -1,
         round: meta?.round ?? 0, sourceEnd: meta?.sourceEnd ?? null, sourceDigest: meta?.sourceDigest ?? null });
-    if (summarySourceChanged(getContext()?.chat ?? [], meta)) archive.sourceChanged = true;
-    else delete archive.sourceChanged;
+    updateSourceReview(archive, getContext()?.chat ?? []);
     const operation = meta?.lastOperation;
     if (operation?.phase === 'undone') {
         archive.undoAtLength = operation.undoAtLength;
@@ -1560,6 +1561,50 @@ function sourceTaskPrompt(task, template, source) {
     return `任务：${task}。下面的资料是本次唯一事实来源；模板中的“上文”“全部剧情”均仅指这些资料。\n`
         + `保留重要事实、人物关系和未解决事项，去除重复描述。只输出整理后的总结正文。\n\n格式要求：\n${template}`
         + `\n\n【资料开始】\n${source}\n【资料结束】\n\n请完成“${task}”，不引用资料以外的聊天剧情。`;
+}
+
+async function retainCurrentMemory() {
+    if (!settings?.enabled || runInProgress || thresholdCheckInProgress || sendLockDepth || archiveEditInProgress || disabledCleanupPending) return false;
+    refreshSourceValidity();
+    const context = getContext();
+    const archive = context?.chatMetadata?.[MODULE_NAME];
+    const meta = entryMetadata(currentSummaryEntry);
+    const journal = meta?.lastOperation;
+    if (!archive?.sourceChanged || !currentSummaryEntry?.content?.trim() || meta?.archiveId !== archive.archiveId) return false;
+    if (archive.pendingSummarySave || journal?.phase === 'saved' || (journal?.combinedRestorePending && !journal.messagesRestored)) {
+        notify('warning', '请先确认上次写入或完成恢复，再选择保留当前总结。');
+        return false;
+    }
+    if (!window.confirm('保留现有总结继续使用？它可能仍包含已删除或修改的剧情。此次不调用模型、不改总结或隐藏楼层，并解除本次原文变更对后续总结的暂停；以后再次修改原文仍会提醒。')) return false;
+    const previous = structuredClone(archive.sourceChangeAcknowledgement ?? null);
+    const end = Math.min(archive.sourceEnd, context.chat.length - 1);
+    archiveEditInProgress = true;
+    lockSending();
+    try {
+        if (typeof context.saveMetadata !== 'function') throw new Error('酒馆缺少聊天状态保存接口。');
+        archive.sourceChangeAcknowledgement = {
+            archiveId: archive.archiveId, summaryRound: archive.round,
+            summarySourceEnd: archive.sourceEnd, summarySourceDigest: archive.sourceDigest,
+            end, digest: historyDigest(context.chat, end),
+        };
+        updateSourceReview(archive, context.chat);
+        await context.saveMetadata();
+        if (getContext()?.chatMetadata?.[MODULE_NAME] !== archive || !sourceChangeAccepted(context.chat, archive)) return false;
+        setStatus('已选择保留现有总结继续使用，本次未调用模型、未修改消息可见状态。');
+        notify('success', '已保留现有总结；本次原文变更不再强制要求更新记忆。');
+        return true;
+    } catch (error) {
+        if (previous) archive.sourceChangeAcknowledgement = previous;
+        else delete archive.sourceChangeAcknowledgement;
+        updateSourceReview(archive, context.chat);
+        notify('error', `保留选择未能保存：${error.message}`);
+        return false;
+    } finally {
+        archiveEditInProgress = false;
+        refreshSourceValidity();
+        unlockSending();
+        syncActionState();
+    }
 }
 
 function updateTaskStage(stage) {
@@ -1868,15 +1913,16 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         assertSummaryActive();
         const beforeEntry = listOwnedEntries(beforeBook).find(entry => entryMetadata(entry)?.archiveId === archiveInfo.archive.archiveId);
         const beforeRevision = entryRevision(beforeEntry, ENTRY_MARKER);
-        if (summarySourceChanged(context.chat, entryMetadata(beforeEntry))) {
+        if (summarySourceChanged(context.chat, entryMetadata(beforeEntry)) && !sourceChangeAccepted(context.chat,
+            { ...entryMetadata(beforeEntry), sourceChangeAcknowledgement: archiveInfo.archive.sourceChangeAcknowledgement })) {
             archiveInfo.archive.sourceChanged = true;
             context.saveMetadataDebounced?.();
         }
         if (operation !== 'rebuild' && archiveInfo.archive.sourceChanged) {
-            throw new Error('已有总结对应的原文已修改、删除或切换版本，请先使用“从当前原文重建”；旧总结与原文保持不变。');
+            throw new Error('已有总结对应的原文已改变，请先选择更新记忆或保留现有总结；旧总结与原文保持不变。');
         }
         if (operation === 'summary' && archiveInfo.archive.branch?.needsRebuild) {
-            throw new Error('本分支需要先使用“从分支原文重建”，避免继承分叉后的剧情。');
+            throw new Error('本分支需要先更新记忆，确认可复用的有效旧总结，避免继承分叉后的剧情。');
         }
         if (operation === 'compact' && !beforeEntry?.content?.trim()) {
             setStatus('当前存档还没有可合并的总结。');
@@ -1884,6 +1930,13 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
             return false;
         }
         const keepRecent = Math.max(1, Math.floor(Number(settings.keepRecent) || 1));
+        const checkpoint = operation === 'rebuild' ? memoryUpdateCheckpoint(archiveRecords(beforeEntry ?? {}), context.chat) : null;
+        if (operation === 'rebuild' && !checkpoint) {
+            const message = '没有可复用的有效旧总结，本次未调用模型，也不会全量重跑历史。可在世界书中手动修正总结，或选择保留现有总结继续使用。';
+            setStatus(message);
+            notify('warning', message);
+            return false;
+        }
         const range = operation === 'compact'
             ? { coveredFrom: entryMetadata(beforeEntry)?.coveredFrom ?? 0, coveredTo: entryMetadata(beforeEntry)?.coveredTo ?? -1, keepRecent }
             : operation === 'rebuild'
@@ -1908,14 +1961,18 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
             ? await context.substituteParamsExtended(template)
             : template;
         if (operation === 'compact') prompt = sourceTaskPrompt('仅合并已有总结，不加入新剧情', prompt, beforeEntry.content);
-        if (operation === 'rebuild') prompt = sourceTaskPrompt('从当前存档原文重建总结（包含隐藏消息）', prompt,
-            context.chat.map((message, index) => `[第 ${index} 层 · ${message.name ?? (message.is_user ? '用户' : '角色')}]\n${message.mes ?? ''}`).join('\n\n'));
+        if (operation === 'rebuild') prompt = sourceTaskPrompt('沿用有效旧总结并更新后续记忆', prompt,
+            `【已验证有效的旧总结，覆盖至第 ${checkpoint.sourceEnd} 层】\n${checkpoint.content}\n\n`
+            + `【后续原文，从第 ${checkpoint.sourceEnd + 1} 层开始；包含这一区间内的隐藏消息】\n`
+            + context.chat.slice(checkpoint.sourceEnd + 1).map((message, offset) =>
+                `[第 ${checkpoint.sourceEnd + 1 + offset} 层 · ${message.name ?? (message.is_user ? '用户' : '角色')}]\n${message.mes ?? ''}`).join('\n\n'));
         if (!String(prompt ?? '').trim()) throw new Error('总结提示词为空。');
         assertSummaryActive();
 
         updateTaskStage('generating');
         showProgress(operation === 'compact' ? '正在合并已有总结，不改变消息可见状态…' : '正在大总结中，请等待…');
-        const summary = await requestMainApiSummary(context, String(prompt), { sourceOnly: operation !== 'summary' });
+        const summary = checkpoint?.sourceEnd === sourceEnd ? checkpoint.content
+            : await requestMainApiSummary(context, String(prompt), { sourceOnly: operation !== 'summary' });
         assertSummaryActive();
         const latestContext = getContext();
         const latestIdentity = getCharacterAndChat(latestContext);
@@ -2081,6 +2138,7 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         currentArchive.sourceEnd = recordSourceEnd;
         currentArchive.sourceDigest = recordSourceDigest;
         delete currentArchive.sourceChanged;
+        delete currentArchive.sourceChangeAcknowledgement;
         delete currentArchive.coverageBlocked;
         delete currentArchive.undoAtLength;
         if (operation === 'rebuild' && currentArchive.branch) currentArchive.branch.needsRebuild = false;
@@ -2873,15 +2931,21 @@ function syncOperationalControls() {
     syncActionState();
 }
 
+function updateSourceReview(archive, chat) {
+    const before = JSON.stringify([archive.sourceChanged, archive.sourceChangeAcknowledgement]);
+    const changed = summarySourceChanged(chat, archive);
+    const accepted = sourceChangeAccepted(chat, archive);
+    if (changed && !accepted) archive.sourceChanged = true;
+    else delete archive.sourceChanged;
+    if (!changed || !accepted) delete archive.sourceChangeAcknowledgement;
+    return before !== JSON.stringify([archive.sourceChanged, archive.sourceChangeAcknowledgement]);
+}
+
 function refreshSourceValidity() {
     const context = getContext();
     const archive = context?.chatMetadata?.[MODULE_NAME];
     if (!settings?.enabled || !archive) return;
-    const changed = summarySourceChanged(context.chat, archive);
-    if (Boolean(archive.sourceChanged) === changed) return;
-    if (changed) archive.sourceChanged = true;
-    else delete archive.sourceChanged;
-    context.saveMetadataDebounced?.();
+    if (updateSourceReview(archive, context.chat)) context.saveMetadataDebounced?.();
 }
 
 function onChatContentChanged() {
@@ -2942,7 +3006,9 @@ function syncActionState() {
     const controls = {
         '.als-run': busy || needsRebuild || !scope.range,
         '.als-compact': busy || !entry?.content?.trim() || needsRebuild,
-        '.als-rebuild': busy || !(needsRebuild || archive?.coverageBlocked),
+        '.als-rebuild': busy || !(needsRebuild || archive?.coverageBlocked || sourceChangeAccepted(context?.chat ?? [], archive)),
+        '.als-retain-memory': busy || !archive?.sourceChanged || !entry?.content?.trim()
+            || Boolean(archive.pendingSummarySave || journal?.phase === 'saved' || (journal?.combinedRestorePending && !journal.messagesRestored)),
         '.als-retry-hide': busy || needsRebuild || journal?.phase !== 'saved' || journal.hideEnd < 0,
         '.als-restore': busy || !journal?.changes?.length || Boolean(journal?.messagesRestored),
         '.als-undo': busy || !journal || journal.phase === 'undone',
@@ -2957,11 +3023,18 @@ function syncActionState() {
     setUiText('.als-undo-restore', journal?.combinedRestorePending ? '继续恢复本次原文' : '撤销本次整理并恢复原文');
     const rebuild = ui.querySelector('.als-rebuild');
     if (rebuild) {
-        rebuild.hidden = !(needsRebuild || archive?.coverageBlocked);
-        rebuild.textContent = archive?.sourceChanged || archive?.coverageBlocked ? '从当前原文重建（含隐藏消息）' : '从分支原文重建（含隐藏消息）';
+        rebuild.hidden = !(needsRebuild || archive?.coverageBlocked || sourceChangeAccepted(context?.chat ?? [], archive));
+        rebuild.textContent = '更新记忆（从有效总结接续）';
     }
     const sourceWarning = ui.querySelector('.als-source-warning');
-    if (sourceWarning) sourceWarning.hidden = !archive?.sourceChanged;
+    const retained = sourceChangeAccepted(context?.chat ?? [], archive);
+    if (sourceWarning) {
+        sourceWarning.hidden = !archive?.sourceChanged && !retained;
+        sourceWarning.textContent = retained ? '已选择保留现有总结，它可能包含已删除或修改的剧情；再次修改已确认的原文时会重新提醒。'
+            : '原文已改变：可以更新记忆，或保留现有总结继续使用。没有有效旧总结时不会全量重跑历史，可到世界书中手动处理。';
+    }
+    const retain = ui.querySelector('.als-retain-memory');
+    if (retain) retain.hidden = !archive?.sourceChanged || !entry?.content?.trim();
     const current = getCharacterAndChat(context);
     const total = context?.chat?.length ?? 0;
     const autoState = automaticStatus(settings, archive, journal, { hasChat: Boolean(current), busy: Boolean(sendLockDepth), hasWork: Boolean(scope.range), chatLength: total });
@@ -2986,9 +3059,9 @@ function syncActionState() {
     setUiText('.als-action-context', !settings.enabled ? '启用插件后可整理；记录页仍可查看历史。'
         : archive?.pendingSummarySave ? '上次写入结果尚未确认，请先刷新世界书状态。'
         : journal?.combinedRestorePending && !journal.messagesRestored ? '总结已撤销，原文尚未全部恢复。继续恢复不会再次撤销或重新生成。'
-        : archive?.sourceChanged ? '已有总结对应的原文已改变。请从当前原文重建；重建成功前保留旧记忆，暂停自动总结。'
-        : archive?.coverageBlocked ? '上次输入覆盖检查未通过，自动总结已暂停。调整上下文后可手动重试，或从当前原文重建。'
-        : archive?.branch?.needsRebuild ? '旧总结跨过分叉点或来源不明。请先从本分支原文重建。'
+        : archive?.sourceChanged ? '原文已改变，请选择更新记忆或保留现有总结。确认前暂停自动总结，仍可继续聊天。'
+        : archive?.coverageBlocked ? '上次输入覆盖检查未通过，自动总结已暂停。可调整上下文后手动重试，或从有效旧总结更新记忆。'
+        : archive?.branch?.needsRebuild ? '部分旧总结无法确认属于当前分支。可从有效旧总结更新记忆，或到世界书中手动处理。'
         : journal?.phase === 'saved' ? '总结已保存，隐藏未完成。请在“恢复与撤销”中只重试隐藏，无需再次总结。'
         : scope.range ? '保存确认后才隐藏旧消息，最近原文也会参与本次总结。'
         : total <= scope.recentCount ? '当前消息均在保留范围内，没有可处理的旧消息。可继续聊天或仅合并已有总结。'
@@ -2997,7 +3070,7 @@ function syncActionState() {
     setUiText('.als-token-comparison', tokenComparisonText(archive?.lastSummaryTokens, journal));
     const suggested = archive?.pendingSummarySave ? ['.als-book-check', '确认上次操作结果']
         : journal?.combinedRestorePending && !journal.messagesRestored ? ['.als-undo-restore', '继续恢复本次原文']
-        : needsRebuild || archive?.coverageBlocked ? ['.als-rebuild', '从当前原文重建']
+        : needsRebuild || archive?.coverageBlocked ? ['.als-rebuild', '更新记忆（从有效总结接续）']
         : journal?.phase === 'saved' && !journal.messagesRestored && journal.hideEnd >= 0 ? ['.als-retry-hide', '只重试隐藏（不重新生成）']
         : !scope.range && entry?.content?.trim() ? ['.als-view-current', '查看当前总结'] : null;
     const nextAction = ui.querySelector('.als-next-action');
@@ -3367,14 +3440,11 @@ async function renderSettings() {
     ui.querySelector('.als-run').addEventListener('click', () => runLargeSummary({ manual: true }));
     ui.querySelector('.als-compact').addEventListener('click', () => runLargeSummary({ operation: 'compact' }));
     ui.querySelector('.als-rebuild').addEventListener('click', () => {
-        const branch = getContext()?.chatMetadata?.[MODULE_NAME]?.branch?.needsRebuild;
-        const question = branch
-            ? '从本分支全部原文（包含隐藏消息）重建总结？成功保存后按保留数量隐藏旧消息，主线总结不受影响。'
-            : '从当前存档全部原文（包含隐藏消息）重建总结？成功后替换当前记忆，并按保留数量隐藏旧消息；历史记录保留。';
-        if (window.confirm(question)) {
+        if (window.confirm('检查仍有效的旧总结，只整理它之后的原文来更新记忆？没有有效旧总结时会停止，不会全量重跑历史。成功后替换当前记忆，历史保留，并按设置隐藏一次旧消息。')) {
             void runLargeSummary({ operation: 'rebuild' });
         }
     });
+    ui.querySelector('.als-retain-memory').addEventListener('click', () => void retainCurrentMemory());
     ui.querySelector('.als-cancel').addEventListener('click', cancelCurrentTask);
     ui.querySelector('.als-incomplete-copy').addEventListener('click', async () => {
         const result = incompleteResults.get(getContext()?.chatMetadata?.[MODULE_NAME]?.archiveId);
