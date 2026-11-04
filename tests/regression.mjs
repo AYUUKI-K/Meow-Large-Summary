@@ -349,6 +349,83 @@ test('reloading reconciles old source digests and undoing a rebuild restores sta
     assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
 });
 
+for (const empty of ['deleted', 'blank']) {
+    test(`rebuild refuses ${empty} source without calling the model or replacing saved memory`, async () => {
+        const f = await fixture({ autoEnabled: false });
+        f.prepareSummary();
+        await f.api.runLargeSummary({ manual: true });
+        const book = f.sandbox.__fixtures.book();
+        const writes = f.writes.length;
+        const commands = [...f.executed];
+        f.context.chat = empty === 'deleted' ? [] : [{ mes: '  \n ' }, { mes: '' }];
+        f.api.evaluate(`onChatContentChanged();
+            requestMainApiSummary = async () => { __fixtures.rebuildCalls = (__fixtures.rebuildCalls ?? 0) + 1; return '没有原文的总结'; };`);
+        assert.notEqual(await f.api.runLargeSummary({ operation: 'rebuild' }), true);
+        assert.equal(f.sandbox.__fixtures.rebuildCalls ?? 0, 0);
+        assert.equal(f.writes.length, writes);
+        assert.deepEqual(f.sandbox.__fixtures.book(), book);
+        assert.deepEqual(f.executed, commands);
+        assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
+        assert.equal(f.api.state().sendLockDepth, 0);
+    });
+}
+
+test('rebuild keeps stale-source warning if original text changes while its result is being saved', async () => {
+    const f = await fixture({ autoEnabled: false });
+    f.prepareSummary();
+    await f.api.runLargeSummary({ manual: true });
+    f.context.chat[0].mes = '第一次修订';
+    f.api.evaluate('onChatContentChanged(); requestMainApiSummary = async () => "重建结果";');
+    const commands = [...f.executed];
+    const save = f.context.saveWorldInfo.bind(f.context);
+    let changed = false;
+    f.context.saveWorldInfo = async (name, data) => {
+        await save(name, data);
+        const operation = data.entries[0]?.extensions?.auto_large_summary?.lastOperation;
+        if (!changed && operation?.operation === 'rebuild' && operation.phase === 'saved') {
+            changed = true;
+            f.context.chat[0].mes = '保存期间再次修订';
+            f.api.evaluate('onChatContentChanged()');
+        }
+    };
+    assert.notEqual(await f.api.runLargeSummary({ operation: 'rebuild' }), true);
+    assert.equal(changed, true);
+    assert.deepEqual(f.executed, commands);
+    assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
+    assert.equal(f.api.evaluate('canSummarize(getContext(), true)'), false);
+    assert.equal(f.controls.get('.als-rebuild').hidden, false);
+    assert.equal(f.api.state().sendLockDepth, 0);
+});
+
+for (const failure of ['model-error', 'cancelled', 'source-edited']) {
+    test(`rebuild ${failure} keeps previous memory and visibility intact`, async () => {
+        const f = await fixture({ autoEnabled: false });
+        f.prepareSummary();
+        await f.api.runLargeSummary({ manual: true });
+        f.context.chat[0].mes = '重建前修订';
+        f.api.evaluate('onChatContentChanged()');
+        const book = f.sandbox.__fixtures.book();
+        const commands = [...f.executed];
+        const visible = f.context.chat.map(message => message.is_system);
+        f.sandbox.__fixtures.rebuildFailure = failure;
+        f.api.evaluate(`requestMainApiSummary = async () => {
+            if (__fixtures.rebuildFailure === 'model-error') throw new Error('模拟 API 失败');
+            if (__fixtures.rebuildFailure === 'cancelled') cancelCurrentTask();
+            if (__fixtures.rebuildFailure === 'source-edited') {
+                __fixtures.context.chat[0].mes = '生成期间再次修订';
+                onChatContentChanged();
+            }
+            return '不应保存的重建结果';
+        };`);
+        assert.notEqual(await f.api.runLargeSummary({ operation: 'rebuild' }), true);
+        assert.deepEqual(f.sandbox.__fixtures.book(), book);
+        assert.deepEqual(f.executed, commands);
+        assert.deepEqual(f.context.chat.map(message => message.is_system), visible);
+        assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
+        assert.equal(f.api.state().sendLockDepth, 0);
+    });
+}
+
 test('input budget warning follows connection capacity without modifying thresholds or blocking manual use', async () => {
     const f = await fixture();
     f.context.mainApi = 'openai';

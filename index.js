@@ -18,7 +18,7 @@ import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.2.19';
+const EXTENSION_VERSION = '1.2.20';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -1848,6 +1848,9 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
             return;
         }
         assertSummaryActive();
+        if (operation === 'rebuild' && !context.chat.some(message => String(message?.mes ?? '').trim())) {
+            throw new Error('当前存档没有可用于重建的原文，旧总结和历史记录保持不变。');
+        }
         const archiveInfo = await ensureArchive(context);
         if (!archiveInfo) return;
         activeRun.archiveId = archiveInfo.archive.archiveId;
@@ -2180,6 +2183,9 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         if (toast) window.toastr?.clear?.(toast, { force: true });
         runInProgress = false;
         activeRun = null;
+        // A message edit during an awaited save can precede metadata updates.
+        // Recheck the committed provenance before presenting the final state.
+        refreshSourceValidity();
         unlockSending();
         syncTaskState();
         syncActionState();
