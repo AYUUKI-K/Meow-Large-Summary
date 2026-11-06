@@ -1,5 +1,14 @@
 # 兼容性核验
 
+## 1.2.22 TT 2.3.0 正式版识别（2026-11-06）
+
+- 本次固定目标为 TT 正式版 [v2.3.0 / a1855be4a4f8](https://github.com/Darkatse/TauriTavern/tree/a1855be4a4f8b6ee7cd0374a84dbb3709c3e5375)。该版本启动时设置 `__TAURI_RUNNING__`，并提供 `__TAURITAVERN__.abiVersion = 1`；此前插件仅检查较新 Canary 的 `__TAURITAVERN_HOST__`，导致正式版收到 HTML 预览响应时无法启用本地兼容。
+- 宿主识别集中在 `modules/host-api.js`，同时识别公开 ABI、TT 早期标识和较新宿主身份；普通 ST、只有通用 Tauri 全局对象或值为 false 的 TT 标识不会误启用预览。
+- 正式版 Rust 后处理文件的 Git blob SHA-1 同样为 `53edbf77bf9d1a3ef2d836b4267711cd36df4c3b`，与既有本地转换所依据的 Canary 完全一致。本次只修复宿主识别，继续使用已有的转换算法和失败保护。
+- 先在 1.2.21 上运行新增正式版场景，7 项失败，包含 HTTP 200 HTML、404/501、自动总结和隐藏重试；修复后相关 17 项全部通过。严格模式下保持原连接设置，自动流程只发起一次模拟模型请求，重试隐藏不再生成，完成后释放发送锁。
+- 完整 327 项检查全部通过、无跳过，其中包含 7 个固定宿主源码契约检查（ST 1.14–1.18、既有 Canary、TT 2.3.0 正式版）。JavaScript 语法和差异格式检查通过。日志保存在本地忽略目录 `output/tt230-tests.txt`。
+- 未运行 TT 原生 WebView、用户设备或真实模型；反馈者的平台/WebView 版本未知。本轮结论为固定源码与隔离模拟核验，不增加其他宿主版本、设备或模型模式的实测声明。
+
 ## 1.2.21 记忆选择与接续更新（2026-11-05）
 
 - 核验有效总结检查点、长存档仅发送后续原文、删除最后一层后直接恢复有效总结，以及无有效总结时停止调用模型。
@@ -129,7 +138,7 @@
 ## TauriTavern 使用条件
 
 1. 使用正常的第三方前端扩展安装方式，保留 `index.js`、`modules/`、`assets/`、`style.css`、`manifest.json`。不需改动 TauriTavern 核心。
-2. 1.2.13 起可以保留主连接的 **自定义提示词后处理**。已核对 Canary 的 Rust 后端实现了生成后处理，但没有 `/api/backends/chat-completions/process` 预览路由；插件对此使用上方说明的本地预览。1.2.9–1.2.12 尚无此兼容。不能可靠转换的输入仍会停止验证，不会跳过隐藏检查。
+2. **TT 2.3.0 正式版需使用插件 1.2.22 或更高版本**，可保留主连接的 **自定义提示词后处理**，无需设为“无”。1.2.13 已加入本地预览，但当时仅通过较新 Canary 的宿主标识进入该路径，正式版识别直到 1.2.22 才补齐。已核对的正式版与 Canary Rust 后端有生成后处理，但没有 `/api/backends/chat-completions/process` 预览路由；插件对此使用本地预览。不能可靠转换的输入仍会停止验证，不会跳过隐藏检查。
 3. 优先用常规聊天补全主连接或 OpenAI 兼容副 API 试用；副 API 仍要求主连接可用以完成宿主原生提示词组装。未对 Canary 新增的 Responses、Gemini Interactions、Agent/MCP 模式及所有提供商变体做端到端验证。
 4. WebView 的 `AbortController`、ES modules、ReadableStream 等基础能力仍须由宿主提供。修复三项 AbortSignal API 依赖不代表支持所有旧 Android/iOS 系统。
 

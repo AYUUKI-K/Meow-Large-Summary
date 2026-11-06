@@ -4,6 +4,14 @@ export async function chatCompletionApi() { return await import('/scripts/openai
 export async function tokenizerApi() { return await import('/scripts/tokenizers.js'); }
 export async function regexApi() { return await import('/scripts/extensions/regex/engine.js'); }
 
+export function isTauriTavernHost() {
+    // TT 2.3.0 exposes the public ABI and early flag, but not the newer host identity.
+    // These are TT-specific; generic Tauri globals alone must not enable its preview.
+    return Boolean(globalThis.__TAURITAVERN__?.abiVersion >= 1
+        || globalThis.__TAURI_RUNNING__ === true
+        || globalThis.__TAURITAVERN_HOST__);
+}
+
 export async function inputTokenBudget(context) {
     const native = await nativeScript();
     const read = native.getMaxPromptTokens ?? native.getMaxContextSize;

@@ -2,7 +2,7 @@ import { LEGACY_DEFAULT_PROMPT, DEFAULT_PROMPT, DEFAULT_MERGED_PROMPT, DEFAULT_S
 import { settingsMarkup, uiIcon } from './modules/settings-ui.js';
 import { renderSummaryReader } from './modules/summary-reader.js';
 import { mountFloatingPanel } from './modules/floating-panel.js';
-import { nativeScript, chatCompletionApi, tokenizerApi, regexApi, worldInfoNames, inputTokenBudget } from './modules/host-api.js';
+import { nativeScript, chatCompletionApi, tokenizerApi, regexApi, worldInfoNames, inputTokenBudget, isTauriTavernHost } from './modules/host-api.js';
 import { activeRecords, archiveTransition, branchRecords, combineRecords, consecutiveRanges, entryRevision, historyDigest, memoryUpdateCheckpoint, messageFingerprint, recoveryMatches, sourceChangeAccepted, sourceDescription, summarySourceChanged, summaryScope, summaryResultText, automaticStatus, tokenComparisonText, textDigest, visibilityChanges } from './modules/summary-model.js';
 import { createCoveragePlan, captureCoverageSources, missingCoverage, thresholdBudgetWarning } from './modules/source-coverage.js';
 import { readWorldBook, saveVerifiedBook } from './modules/world-book.js';
@@ -18,7 +18,7 @@ import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.2.21';
+const EXTENSION_VERSION = '1.2.22';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -644,7 +644,7 @@ async function processedPreview(context, data) {
                 }, { signal: activeRun?.controller?.signal, label: '提示词后处理失败' });
             } catch (error) {
                 if (activeRun?.controller?.signal.aborted) throw activeRun.controller.signal.reason ?? new Error('本次总结已取消。');
-                if (globalThis.__TAURITAVERN_HOST__ && (error.code === 'HTML_RESPONSE' || [404, 501].includes(error.status))) {
+                if (isTauriTavernHost() && (error.code === 'HTML_RESPONSE' || [404, 501].includes(error.status))) {
                     processed = { messages: tauriPromptPreview(messages, processing, prepared) };
                 } else if (error.code === 'HTML_RESPONSE') {
                     throw new Error(`${error.message} 当前酒馆未提供有效的提示词后处理预览，请检查该接口的路由。`);

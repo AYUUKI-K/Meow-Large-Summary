@@ -51,7 +51,7 @@
 
 这表示某个接口返回了 HTML 页面，却被当作 JSON 解析。可能是登录页、反向代理错误页或宿主不支持的路由；仅凭这条错误不能确定是哪一种。
 
-如果手动总结能生成且记录可见，但自动总结和“只重试隐藏”失败，优先检查主连接的“自定义提示词后处理”：自动总结计数和隐藏前确认都会请求 `/api/backends/chat-completions/process`，生成成功并不代表这个预览接口可用。TauriTavern 用户可更新至 1.2.13，保留后处理设置，刷新计数，再对已保存的总结点击“只重试隐藏”，无需重新生成总结。普通 SillyTavern 应检查预览接口及代理路由。
+如果手动总结能生成且记录可见，但自动总结和“只重试隐藏”失败，优先检查主连接的“自定义提示词后处理”：自动总结计数和隐藏前确认都会请求 `/api/backends/chat-completions/process`，生成成功并不代表这个预览接口可用。TauriTavern 用户可更新至 1.2.22（补齐 TT 2.3.0 正式版识别），重启后保留或恢复原来的后处理设置，无需设为“无”；刷新计数，再对已保存的总结点击“只重试隐藏”，无需重新生成总结。普通 SillyTavern 应检查预览接口及代理路由。
 
 错误提示会标明失败接口与 HTTP 状态；收到 HTML 时明确说明原因类别。若仍失败，请提供完整提示、宿主名称和版本、后处理模式及触发操作；管理员可检查该接口的状态码、响应类型、登录及代理路由。插件不会因预览失败而跳过隐藏前校验。
 
@@ -116,6 +116,8 @@ playwright-cli run-code --filename tests/floating-panel-layer-browser.js
 node scripts/fetch-compat-hosts.mjs
 node --test tests/host-contracts.mjs
 ```
+
+仅获取本次 TT 2.3.0 正式版固定源码时，可运行 `node scripts/fetch-compat-hosts.mjs tauri-2.3.0`。
 
 下载只写入忽略的 `output/hosts`，不改动任何用户酒馆；没有下载源码时，源码检查会明确标为 skipped。
 

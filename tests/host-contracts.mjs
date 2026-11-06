@@ -6,8 +6,8 @@ import { readFile, access } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 const root = new URL('../output/hosts/', import.meta.url);
-for (const version of ['1.14.0', '1.15.0', '1.16.0', '1.17.0', '1.18.0', 'tauri-canary']) {
-    const tauri = version === 'tauri-canary';
+for (const version of ['1.14.0', '1.15.0', '1.16.0', '1.17.0', '1.18.0', 'tauri-canary', 'tauri-2.3.0']) {
+    const tauri = version.startsWith('tauri-');
     const folder = new URL(`${tauri ? version : `st-${version}`}/`, root);
     const frontend = tauri ? 'src' : 'public';
     let available = true;
@@ -57,11 +57,20 @@ for (const version of ['1.14.0', '1.15.0', '1.16.0', '1.17.0', '1.18.0', 'tauri-
             assert.match(openai, /export async function createGenerationParameters\(/);
         }
         if (tauri) {
+            if (version === 'tauri-2.3.0') {
+                const init = await read('src/init.js');
+                const bootstrap = await read('src/tauri/main/bootstrap.js');
+                assert.match(init, /window\.__TAURI_RUNNING__ = true/);
+                assert.match(bootstrap, /window\.__TAURITAVERN__ = \{/);
+                assert.match(bootstrap, /const HOST_ABI_VERSION = 1/);
+                assert.doesNotMatch(init + bootstrap, /__TAURITAVERN_HOST__/);
+            }
             const processing = (await read('src-tauri/crates/tt-application/src/services/chat_completion_service/payload/prompt_post_processing.rs')).replace(/\r\n/g, '\n');
             const bytes = Buffer.from(processing);
             assert.equal(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'),
                 '53edbf77bf9d1a3ef2d836b4267711cd36df4c3b', 'TT local preview must be reviewed against any changed backend implementation');
             const routes = await read('src/tauri/main/routes/ai-routes.js');
+            assert.doesNotMatch(routes, /\/api\/backends\/chat-completions\/process/);
             assert.match(routes, /\/api\/backends\/chat-completions\/generate/);
             assert.match(routes, /\/api\/backends\/chat-completions\/status/);
             assert.match(routes, /createChatCompletionStreamResponse\(context, payload, init\?\.signal/);

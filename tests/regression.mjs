@@ -12,6 +12,12 @@ const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.me
 const markupSource = await readFile(new URL('../modules/settings-ui.js', import.meta.url), 'utf8');
 const stylesheet = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 
+// v2.3.0 predates __TAURITAVERN_HOST__; do not model all TT versions as Canary.
+const tauriHosts = [
+    ['TT 2.3.0', { __TAURI_RUNNING__: true, __TAURITAVERN__: { abiVersion: 1 } }],
+    ['TT Canary', { __TAURITAVERN_HOST__: { platform: 'android', kind: 'mobile' } }],
+];
+
 test('1.14–1.17 world list fallback refreshes before create and sees later lists', async () => {
     const f = await fixture();
     delete f.context.getWorldInfoNames;
@@ -56,9 +62,9 @@ test('1.14 end-to-end save and hide requires both unmarked and entry-traced prev
     assert.equal(f.handlers.get('entries-loaded').size, 0);
 });
 
-for (const status of [404, 501]) test(`Tauri missing post-processing route ${status} uses strict local preview without changing settings`, async () => {
+for (const [host, globals] of tauriHosts) for (const status of [404, 501]) test(`${host} missing post-processing route ${status} uses strict local preview without changing settings`, async () => {
     const f = await fixture();
-    f.sandbox.__TAURITAVERN_HOST__ = { platform: 'android', kind: 'mobile' };
+    Object.assign(f.sandbox, structuredClone(globals));
     f.api.evaluate(`prepareChatPreview = async (_, messages) => ({ messages, chat_completion_source: 'custom', custom_prompt_post_processing: 'strict' });`);
     let requests = 0;
     f.sandbox.fetch = async url => {
@@ -77,10 +83,17 @@ for (const status of [404, 501]) test(`Tauri missing post-processing route ${sta
     assert.equal(requests, 1);
 });
 
-for (const tauri of [false, true]) {
-    test(`HTML post-processing preview (${tauri ? 'Tauri' : 'ST'}) reports route and remedy without bypassing verification`, async () => {
+for (const [host, globals, tauri] of [
+    ...tauriHosts.map(([host, globals]) => [host, globals, true]),
+    ['TT platform ABI', { __TAURITAVERN__: { abiVersion: 1 } }, true],
+    ['TT legacy flag', { __TAURI_RUNNING__: true }, true],
+    ['ST', {}, false],
+    ['other Tauri app', { __TAURI__: {}, __TAURI_INTERNALS__: {} }, false],
+    ['inactive TT flag', { __TAURI_RUNNING__: false }, false],
+]) {
+    test(`HTML post-processing preview (${host}) reports route and remedy without bypassing verification`, async () => {
         const f = await fixture();
-        if (tauri) f.sandbox.__TAURITAVERN_HOST__ = { platform: 'android' };
+        Object.assign(f.sandbox, structuredClone(globals));
         f.api.evaluate(`prepareChatPreview = async (_, messages) => ({ messages, chat_completion_source: 'custom', custom_prompt_post_processing: 'strict' });`);
         let requests = 0;
         f.sandbox.fetch = async url => {
@@ -104,9 +117,9 @@ for (const tauri of [false, true]) {
     });
 }
 
-test('TT prefers a native preview and never falls back on auth, server, invalid JSON or cancellation errors', async () => {
+for (const [host, globals] of tauriHosts) test(`${host} prefers a native preview and never falls back on auth, server, invalid JSON or cancellation errors`, async () => {
     const f = await fixture();
-    f.sandbox.__TAURITAVERN_HOST__ = {};
+    Object.assign(f.sandbox, structuredClone(globals));
     f.api.evaluate(`prepareChatPreview = async (_, messages) => ({ messages, chat_completion_source: 'custom', custom_prompt_post_processing: 'strict' });`);
     f.sandbox.fetch = async () => Response.json({ messages: [{ role: 'user', content: 'native result' }] });
     assert.equal((await f.api.evaluate('processedPreview(getContext(), {prompt:[]})'))[0].content, 'native result');
@@ -124,9 +137,9 @@ test('TT prefers a native preview and never falls back on auth, server, invalid 
     await assert.rejects(f.api.evaluate('processedPreview(getContext(), {prompt:[]})'), /cancelled before fallback/);
 });
 
-for (const flow of ['auto', 'retry']) test(`TT strict ${flow}: counts and verifies locally, sends one unchanged model request`, async () => {
+for (const [host, globals] of tauriHosts) for (const flow of ['auto', 'retry']) test(`${host} strict ${flow}: counts and verifies locally, sends one unchanged model request`, async () => {
     const f = await fixture({ streamSummary: false });
-    f.sandbox.__TAURITAVERN_HOST__ = { platform: 'android' };
+    Object.assign(f.sandbox, structuredClone(globals));
     f.context.chatCompletionSettings = { chat_completion_source: 'custom', custom_prompt_post_processing: 'strict' };
     const settingsBefore = structuredClone(f.context.chatCompletionSettings);
     f.api.evaluate('__fixtures.verifyInjection = verifySummaryInjection;');
