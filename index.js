@@ -3,8 +3,8 @@ import { settingsMarkup, uiIcon } from './modules/settings-ui.js';
 import { renderSummaryReader } from './modules/summary-reader.js';
 import { mountFloatingPanel } from './modules/floating-panel.js';
 import { nativeScript, chatCompletionApi, tokenizerApi, regexApi, worldInfoNames, inputTokenBudget, isTauriTavernHost } from './modules/host-api.js';
-import { activeRecords, archiveTransition, branchRecords, combineRecords, consecutiveRanges, entryRevision, historyDigest, memoryUpdateCheckpoint, messageFingerprint, recoveryMatches, sourceChangeAccepted, sourceDescription, summarySourceChanged, summaryScope, summaryResultText, automaticStatus, tokenComparisonText, textDigest, visibilityChanges } from './modules/summary-model.js';
-import { createCoveragePlan, captureCoverageSources, missingCoverage, thresholdBudgetWarning } from './modules/source-coverage.js';
+import { activeRecords, archiveTransition, branchRecords, combineRecords, consecutiveRanges, createHistoryDigestReader, entryRevision, historyDigest, memoryUpdateCheckpoint, messageFingerprint, recoveryMatches, sourceChangeAccepted, sourceDescription, summarySourceChanged, summaryScope, summaryResultText, automaticStatus, tokenComparisonText, textDigest, visibilityChanges } from './modules/summary-model.js';
+import { createCoveragePlan, captureCoverageSources, createCoverageVerifier, thresholdBudgetWarning } from './modules/source-coverage.js';
 import { readWorldBook, saveVerifiedBook } from './modules/world-book.js';
 import { setTaskStage, taskLabel } from './modules/task-state.js';
 import { fetchJson, combineRequestSignals } from './modules/network.js';
@@ -18,7 +18,7 @@ import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.2.22';
+const EXTENSION_VERSION = '1.3.0';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -899,14 +899,17 @@ async function requestMainApiSummary(context, prompt, { sourceOnly = false } = {
         // Prefer CHAT_COMPLETION_PROMPT_READY, before EJS/settings hooks rewrite
         // content. Text-completion hosts use GENERATE_AFTER_DATA instead.
         if (!request.coverage.observed) {
-            request.coverage.prompt = structuredClone(assembled);
+            const verify = createCoverageVerifier(assembled);
             request.coverage.observed = true;
-            const missing = missingCoverage(request.coverage.sources, assembled);
+            let missing = verify(request.coverage.sources);
             if (missing?.length && context.substituteParamsExtended) {
+                const missingIndices = new Set(missing);
                 for (const source of request.coverage.sources) {
-                    if (source.text && missing.includes(source.index)) source.text = String(await context.substituteParamsExtended(source.text));
+                    if (source.text && missingIndices.has(source.index)) source.text = String(await context.substituteParamsExtended(source.text));
                 }
+                missing = verify(request.coverage.sources);
             }
+            request.coverage.missing = missing;
         }
     };
     const coverageEvents = [context.eventTypes?.CHAT_COMPLETION_PROMPT_READY, context.eventTypes?.GENERATE_AFTER_DATA].filter(Boolean);
@@ -944,7 +947,7 @@ async function requestMainApiSummary(context, prompt, { sourceOnly = false } = {
         }
         let response;
         if (matches && request.coverage) {
-            const missing = missingCoverage(request.coverage.sources, request.coverage.prompt);
+            const missing = request.coverage.missing;
             if (!request.coverage.observed || missing === null || missing.length) {
                 const detail = missing?.length ? `第 ${missing.slice(0, 5).join('、')} 层${missing.length > 5 ? '等' : ''}未在组装结果中确认` : '缺少宿主的原文覆盖信息';
                 request.error = new Error(`总结输入不完整：${detail}。尚未调用模型，也未隐藏消息；请检查上下文、聊天历史开关或模板，或从原文重建。`);
@@ -1275,8 +1278,8 @@ function archiveRecords(entry) {
     }];
 }
 
-function consolidateArchive(data, archiveId) {
-    const entries = listOwnedEntries(data)
+function consolidateArchive(data, archiveId, candidates = listOwnedEntries(data)) {
+    const entries = candidates
         .filter(entry => entryMetadata(entry)?.archiveId === archiveId)
         .sort((a, b) => (entryMetadata(a)?.round ?? 0) - (entryMetadata(b)?.round ?? 0));
     if (!entries.length) return { entry: null, changed: false };
@@ -1399,7 +1402,7 @@ async function initializeBranchArchive(context, archiveInfo, data) {
     catch (error) { branch.pending = true; throw error; }
 }
 
-async function updateWorldBookStatus() {
+async function updateWorldBookStatus({ refresh = true } = {}) {
     const context = getContext();
     if (!context || !ui) return;
     const label = ui.querySelector('.als-book-status');
@@ -1408,16 +1411,19 @@ async function updateWorldBookStatus() {
         return;
     }
     const revision = enabledRevision;
+    const bookName = settings.worldBookName;
+    const stillCurrent = () => settings.enabled && revision === enabledRevision && bookName === settings.worldBookName;
     try {
-        await context.updateWorldInfoList();
-        if (!settings.enabled || revision !== enabledRevision) return;
-        const exists = (await worldInfoNames(context)).includes(settings.worldBookName);
+        if (refresh) await context.updateWorldInfoList();
+        if (!stillCurrent()) return;
+        const exists = (await worldInfoNames(context)).includes(bookName);
+        if (!stillCurrent()) return;
         const mounted = [...document.querySelectorAll('#world_info option')]
-            .some(option => option.textContent?.trim() === settings.worldBookName && option.selected);
+            .some(option => option.textContent?.trim() === bookName && option.selected);
         label.textContent = !exists ? '还没建好喵 · 首次总结会自动创建并全局启用'
             : mounted ? '世界书建好并全局启用啦喵' : '世界书建好啦喵 · 下次总结会自动全局启用';
     } catch (error) {
-        if (!settings.enabled || revision !== enabledRevision) return;
+        if (!stillCurrent()) return;
         label.textContent = meowText(`无法读取世界书状态：${error.message}`);
     }
 }
@@ -1473,8 +1479,13 @@ async function setArchiveActivation(archiveId, { reconcileCursor = false, bookDa
             }
         }
     }
-    const archiveIds = new Set(listOwnedEntries(data).map(entry => entryMetadata(entry)?.archiveId));
-    for (const id of archiveIds) changed = consolidateArchive(data, id).changed || changed;
+    const archiveGroups = new Map();
+    for (const entry of listOwnedEntries(data)) {
+        const id = entryMetadata(entry)?.archiveId;
+        if (!archiveGroups.has(id)) archiveGroups.set(id, []);
+        archiveGroups.get(id).push(entry);
+    }
+    for (const [id, entries] of archiveGroups) changed = consolidateArchive(data, id, entries).changed || changed;
     const owned = listOwnedEntries(data);
     const latest = owned.find(entry => entryMetadata(entry)?.archiveId === archiveId
         && (!identity || entryMetadata(entry)?.cardKey === identity.cardKey));
@@ -1511,7 +1522,7 @@ async function setArchiveActivation(archiveId, { reconcileCursor = false, bookDa
     await activateWorldBook(context);
     if (!stillCurrent()) return false;
     context.reloadWorldInfoEditor?.(settings.worldBookName);
-    void updateWorldBookStatus();
+    void updateWorldBookStatus({ refresh: false });
     currentSummaryEntry = latest ?? null;
     syncActionState();
 
@@ -1953,7 +1964,7 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         }
         const sourceSnapshot = captureMessageRange(context.chat, context.chat.length - 1);
         const sourceEnd = context.chat.length - 1;
-        const sourceDigest = historyDigest(context.chat, sourceEnd);
+        const sourceDigest = textDigest(JSON.stringify(sourceSnapshot.map(message => message.fingerprint)));
         const mode = operation === 'summary' ? modeOverride ?? settings.mode : 'merged';
         const promptStyle = settings.promptStyle;
         const template = operation === 'summary' && modeOverride === null ? settings.prompt : promptTemplates(settings)[mode];
@@ -2466,7 +2477,8 @@ async function syncCurrentArchive() {
     if (existing && stillEnabled()) await setArchiveActivation(archiveInfo?.archive.archiveId ?? null, { reconcileCursor: true, bookData: existing });
     if (!stillEnabled()) return;
     syncActionState();
-    void updateWorldBookStatus();
+    // prepareWorldBook/activateWorldBook already refreshed the host's file list.
+    void updateWorldBookStatus({ refresh: false });
     if (currentTab === 'directory') void renderDirectory();
 }
 
@@ -2933,8 +2945,9 @@ function syncOperationalControls() {
 
 function updateSourceReview(archive, chat) {
     const before = JSON.stringify([archive.sourceChanged, archive.sourceChangeAcknowledgement]);
-    const changed = summarySourceChanged(chat, archive);
-    const accepted = sourceChangeAccepted(chat, archive);
+    const digest = createHistoryDigestReader(chat);
+    const changed = summarySourceChanged(chat, archive, digest);
+    const accepted = sourceChangeAccepted(chat, archive, digest);
     if (changed && !accepted) archive.sourceChanged = true;
     else delete archive.sourceChanged;
     if (!changed || !accepted) delete archive.sourceChangeAcknowledgement;
@@ -2983,6 +2996,9 @@ function syncActionState() {
     const scope = summaryScope(context?.chat ?? [], settings.keepRecent, archive?.lastSummarizedThrough ?? -1,
         journal?.phase === 'saved' ? journal.hideEnd : -1);
     const needsRebuild = Boolean(archive?.branch?.needsRebuild || archive?.sourceChanged);
+    // Rendering/stream progress must not rehash the entire chat. Source review
+    // runs on content events and again at the actual save/generation boundaries.
+    const retained = Boolean(archive?.sourceChangeAcknowledgement && !archive.sourceChanged);
     const draftArchiveId = archive?.chatId === context?.chatId && archive?.cardKey === getCharacterAndChat(context)?.cardKey ? archive?.archiveId : null;
     loadIncompleteDraft(draftArchiveId);
     const incomplete = incompleteResults.get(draftArchiveId);
@@ -3006,7 +3022,7 @@ function syncActionState() {
     const controls = {
         '.als-run': busy || needsRebuild || !scope.range,
         '.als-compact': busy || !entry?.content?.trim() || needsRebuild,
-        '.als-rebuild': busy || !(needsRebuild || archive?.coverageBlocked || sourceChangeAccepted(context?.chat ?? [], archive)),
+        '.als-rebuild': busy || !(needsRebuild || archive?.coverageBlocked || retained),
         '.als-retain-memory': busy || !archive?.sourceChanged || !entry?.content?.trim()
             || Boolean(archive.pendingSummarySave || journal?.phase === 'saved' || (journal?.combinedRestorePending && !journal.messagesRestored)),
         '.als-retry-hide': busy || needsRebuild || journal?.phase !== 'saved' || journal.hideEnd < 0,
@@ -3023,11 +3039,10 @@ function syncActionState() {
     setUiText('.als-undo-restore', journal?.combinedRestorePending ? '继续恢复本次原文' : '撤销本次整理并恢复原文');
     const rebuild = ui.querySelector('.als-rebuild');
     if (rebuild) {
-        rebuild.hidden = !(needsRebuild || archive?.coverageBlocked || sourceChangeAccepted(context?.chat ?? [], archive));
+        rebuild.hidden = !(needsRebuild || archive?.coverageBlocked || retained);
         rebuild.textContent = '更新记忆（从有效总结接续）';
     }
     const sourceWarning = ui.querySelector('.als-source-warning');
-    const retained = sourceChangeAccepted(context?.chat ?? [], archive);
     if (sourceWarning) {
         sourceWarning.hidden = !archive?.sourceChanged && !retained;
         sourceWarning.textContent = retained ? '已选择保留现有总结，它可能包含已删除或修改的剧情；再次修改已确认的原文时会重新提醒。'

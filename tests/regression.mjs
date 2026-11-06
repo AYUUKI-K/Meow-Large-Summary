@@ -3423,3 +3423,72 @@ test('one summary reuses its initial book while retaining fresh conflict reads a
     assert.equal(f.writes.length, 2);
     assert.deepEqual(f.executed, ['/hide 0-9']);
 });
+
+test('progress rendering does not rehash retained memory, and source edits still invalidate the choice', async () => {
+    const f = await fixture();
+    await prepareChangedMemory(f);
+    assert.equal(await f.api.evaluate('retainCurrentMemory()'), true);
+    let reads = 0;
+    f.context.chat[0].extra = { get reasoning() { reads++; return null; } };
+    for (let i = 0; i < 20; i++) f.api.evaluate('syncActionState()');
+    assert.equal(reads, 0, 'rendering must not scan source fingerprints on every progress tick');
+    f.context.chat[0].mes = '再次修改已确认的剧情';
+    f.api.evaluate('onChatContentChanged()');
+    assert.ok(reads > 0);
+    assert.equal(f.context.chatMetadata.auto_large_summary.sourceChanged, true);
+    assert.equal(f.context.chatMetadata.auto_large_summary.sourceChangeAcknowledgement, undefined);
+    assert.equal(f.api.evaluate('canSummarize(getContext(), true)'), false);
+});
+
+test('world-book status reuses an explicitly refreshed list but manual refresh still reads it', async () => {
+    const f = await fixture();
+    const label = { textContent: '' };
+    f.controls.set('.als-book-status', label);
+    let reads = 0;
+    f.context.updateWorldInfoList = async () => { reads++; };
+    await f.api.evaluate('updateWorldBookStatus({refresh:false})');
+    assert.equal(reads, 0);
+    assert.match(label.textContent, /还没建好/);
+    await f.api.evaluate('updateWorldBookStatus()');
+    assert.equal(reads, 1);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    f.context.getWorldInfoNames = () => gate;
+    label.textContent = '新的世界书状态';
+    const pending = f.api.evaluate('updateWorldBookStatus({refresh:false})');
+    f.api.evaluate('settings.worldBookName = "另一世界书"');
+    release([]);
+    await pending;
+    assert.equal(label.textContent, '新的世界书状态', 'an old response cannot replace a new book status');
+});
+
+test('archive activation groups many archives without repeatedly traversing the full world book', async () => {
+    const f = await fixture();
+    await f.api.evaluate('ensureArchive()');
+    const entries = {};
+    for (let i = 0; i < 200; i++) {
+        const id = i ? `archive-${i}` : 'archive-a';
+        entries[i * 2] = ownedSummaryEntry(i * 2, id);
+        entries[i * 2 + 1] = ownedSummaryEntry(i * 2 + 1, id);
+        const meta = entries[i * 2 + 1].extensions.auto_large_summary;
+        meta.round = 2;
+        meta.records[0].round = 2;
+    }
+    entries[999] = { uid: 999, content: '手写世界书', constant: true, disable: false };
+    let traversals = 0;
+    f.sandbox.__fixtures.groupBook = { entries: new Proxy(entries, {
+        ownKeys(target) { traversals++; return Reflect.ownKeys(target); },
+    }) };
+    const save = f.context.saveWorldInfo;
+    f.context.saveWorldInfo = (name, data) => save(name, JSON.parse(JSON.stringify(data)));
+    f.api.evaluate('activateWorldBook = async () => {}; updateWorldBookStatus = async () => {};');
+    await f.api.evaluate('setArchiveActivation("archive-a", {bookData: __fixtures.groupBook})');
+    assert.ok(traversals < 20, `full-book traversals should not grow with archives: ${traversals}`);
+    const saved = f.sandbox.__fixtures.book().entries;
+    assert.equal(Object.keys(saved).length, 201);
+    assert.equal(saved[0].extensions.auto_large_summary.records.length, 2);
+    assert.equal(saved[0].disable, false);
+    assert.equal(saved[2].disable, true);
+    assert.equal(saved[999].content, '手写世界书');
+    assert.equal(saved[999].disable, false);
+});

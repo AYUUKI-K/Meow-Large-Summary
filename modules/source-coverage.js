@@ -3,7 +3,7 @@
 const normalize = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 
 export function createCoveragePlan(chat) {
-    return { chat: [...chat], sources: null, prompt: null, observed: false };
+    return { chat: [...chat], sources: null, missing: null, observed: false };
 }
 
 export function captureCoverageSources(plan, coreChat) {
@@ -23,22 +23,31 @@ export function captureCoverageSources(plan, coreChat) {
 
 export function missingCoverage(sources, prompt) {
     if (!sources) return null;
+    return createCoverageVerifier(prompt)(sources);
+}
+
+// Capture only immutable text, not a clone of the host's whole request (images,
+// tool metadata, etc.). Macro fallback can reuse this normalized prompt.
+export function createCoverageVerifier(prompt) {
     const content = value => Array.isArray(value)
         ? value.map(part => typeof part === 'string' ? part : part?.text ?? '').join('\n') : String(value ?? '');
     const text = normalize(Array.isArray(prompt) ? prompt.map(message => content(message.content)).join('\n') : prompt);
-    let offset = 0;
-    const missing = [];
-    for (const source of sources) {
-        if (source.text === null) { missing.push(source.index); continue; }
-        const expected = normalize(source.text);
-        // A message intentionally removed by send-time regex has no text to
-        // compare. This checks host trimming, not the semantics of that regex.
-        if (!expected) continue;
-        const start = text.indexOf(expected, offset);
-        if (start < 0) missing.push(source.index);
-        else offset = start + expected.length;
-    }
-    return missing;
+    return sources => {
+        if (!sources) return null;
+        let offset = 0;
+        const missing = [];
+        for (const source of sources) {
+            if (source.text === null) { missing.push(source.index); continue; }
+            const expected = normalize(source.text);
+            // A message intentionally removed by send-time regex has no text to
+            // compare. This checks host trimming, not the semantics of that regex.
+            if (!expected) continue;
+            const start = text.indexOf(expected, offset);
+            if (start < 0) missing.push(source.index);
+            else offset = start + expected.length;
+        }
+        return missing;
+    };
 }
 
 export function thresholdBudgetWarning(threshold, budget) {

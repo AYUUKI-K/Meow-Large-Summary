@@ -24,14 +24,43 @@ export function historyDigest(chat, end = chat.length - 1) {
     return textDigest(JSON.stringify(chat.slice(0, end + 1).map(messageFingerprint)));
 }
 
-export function summarySourceChanged(chat, metadata) {
+// Short-lived reader for one synchronous validation. It preserves the stored
+// digest format, but hashes each message only once across multiple endpoints.
+// Never retain this reader across awaits or chat mutations.
+export function createHistoryDigestReader(chat) {
+    const digests = [];
+    let a = 2166136261, b = 2246822519, length = 0;
+    const append = text => {
+        for (let i = 0; i < text.length; i++) {
+            const value = text.charCodeAt(i);
+            a = Math.imul(a ^ value, 16777619);
+            b = Math.imul(b ^ value, 3266489917);
+        }
+        length += text.length;
+    };
+    append('[');
+    return (end = chat.length - 1) => {
+        if (!Number.isInteger(end)) return historyDigest(chat, end);
+        if (end < 0) return textDigest('[]');
+        if (end >= chat.length) return null;
+        while (digests.length <= end) {
+            const index = digests.length;
+            append((index ? ',' : '') + (index in chat ? JSON.stringify(messageFingerprint(chat[index])) : 'null'));
+            // Finish a copy of the rolling prefix, leaving it open for the next message.
+            digests.push(`${length + 1}:${(Math.imul(a ^ 93, 16777619) >>> 0).toString(16)}:${(Math.imul(b ^ 93, 3266489917) >>> 0).toString(16)}`);
+        }
+        return digests[end];
+    };
+}
+
+export function summarySourceChanged(chat, metadata, digest = end => historyDigest(chat, end)) {
     if (!Number.isInteger(metadata?.sourceEnd) || metadata.sourceEnd < 0 || !metadata.sourceDigest) return false;
-    return historyDigest(chat, metadata.sourceEnd) !== metadata.sourceDigest;
+    return digest(metadata.sourceEnd) !== metadata.sourceDigest;
 }
 
 // A user's explicit choice to keep old memory does not repair its provenance.
 // Bind the choice to this archive, summary revision and changed source prefix.
-export function sourceChangeAccepted(chat, metadata) {
+export function sourceChangeAccepted(chat, metadata, digest = end => historyDigest(chat, end)) {
     const choice = metadata?.sourceChangeAcknowledgement;
     return Boolean(choice && typeof metadata.archiveId === 'string' && metadata.archiveId
         && choice.archiveId === metadata.archiveId
@@ -39,7 +68,7 @@ export function sourceChangeAccepted(chat, metadata) {
         && choice.summarySourceEnd === metadata.sourceEnd && choice.summarySourceDigest === metadata.sourceDigest
         && Number.isInteger(choice.end) && choice.end >= -1 && choice.end < chat.length
         && typeof choice.digest === 'string' && choice.digest
-        && choice.digest === historyDigest(chat, choice.end));
+        && choice.digest === digest(choice.end));
 }
 
 export function memoryUpdateCheckpoint(records, chat) {
@@ -64,11 +93,12 @@ export function combineRecords(records) {
 }
 
 export function branchRecords(records, chat) {
+    const digest = createHistoryDigestReader(chat);
     let inherited = [];
     let missingEarlier = false;
     for (const record of activeRecords(records)) {
         const known = Number.isInteger(record.sourceEnd) && record.sourceEnd >= 0 && record.sourceDigest
-            && historyDigest(chat, record.sourceEnd) === record.sourceDigest;
+            && digest(record.sourceEnd) === record.sourceDigest;
         if (!known) { missingEarlier = true; continue; }
         if (record.mode === 'merged') {
             if (missingEarlier) inherited = [];
@@ -101,12 +131,21 @@ export function summaryScope(chat, keep, cursor = -1, pendingHideEnd = -1) {
     const keepRecent = Math.max(1, Math.floor(Number(keep) || 1));
     const coveredTo = chat.length - keepRecent - 1;
     const coveredFrom = Math.max(0, cursor + 1);
-    const eligible = coveredTo >= coveredFrom && chat.slice(coveredFrom, coveredTo + 1)
-        .some(message => !message.is_system && String(message.mes ?? '').trim());
+    let eligible = false;
+    let hiddenCount = 0;
+    let pendingCount = 0;
+    let candidateCount = 0;
+    // One pass without allocating filtered copies of a potentially long chat.
+    for (let index = 0; index < chat.length; index++) {
+        const message = chat[index];
+        if (message.is_system) { hiddenCount++; continue; }
+        if (index <= pendingHideEnd) pendingCount++;
+        if (index <= coveredTo) candidateCount++;
+        if (!eligible && index >= coveredFrom && index <= coveredTo && String(message.mes ?? '').trim()) eligible = true;
+    }
     const range = eligible ? { coveredFrom, coveredTo, keepRecent } : null;
     const hideEnd = Math.max(pendingHideEnd, range?.coveredTo ?? -1);
-    const hiddenCount = chat.filter(message => message.is_system).length;
-    const pendingCount = chat.filter((message, index) => index <= hideEnd && !message.is_system).length;
+    if (hideEnd > pendingHideEnd) pendingCount = candidateCount;
     return { range, hideEnd, hiddenCount, pendingCount, keptCount: chat.length - hiddenCount - pendingCount,
         recentCount: Math.min(chat.length, keepRecent) };
 }
