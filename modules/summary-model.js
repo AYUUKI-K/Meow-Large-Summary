@@ -120,7 +120,7 @@ export function archiveTransition(archive, current, integrity) {
 
 export function visibilityChanges(chat, end) {
     if (end < 0) return [];
-    return chat.slice(0, end + 1).flatMap((message, index) => message.is_system ? [] : [{
+    return chat.slice(0, end + 1).flatMap((message, index) => !message || message.is_system ? [] : [{
         index, fingerprint: messageFingerprint(message),
     }]);
 }
@@ -129,15 +129,19 @@ export function visibilityChanges(chat, end) {
 // trigger a new summary. A saved operation may still need its hide retried.
 export function summaryScope(chat, keep, cursor = -1, pendingHideEnd = -1) {
     const keepRecent = Math.max(1, Math.floor(Number(keep) || 1));
-    const coveredTo = chat.length - keepRecent - 1;
     const coveredFrom = Math.max(0, cursor + 1);
+    let coveredTo = -1;
+    let messageCount = 0;
     let eligible = false;
     let hiddenCount = 0;
     let pendingCount = 0;
     let candidateCount = 0;
-    // One pass without allocating filtered copies of a potentially long chat.
-    for (let index = 0; index < chat.length; index++) {
+    // Count actual messages from the tail while retaining host floor numbers.
+    for (let index = chat.length - 1; index >= 0; index--) {
         const message = chat[index];
+        if (message == null) continue;
+        messageCount++;
+        if (messageCount === keepRecent + 1) coveredTo = index;
         if (message.is_system) { hiddenCount++; continue; }
         if (index <= pendingHideEnd) pendingCount++;
         if (index <= coveredTo) candidateCount++;
@@ -146,8 +150,8 @@ export function summaryScope(chat, keep, cursor = -1, pendingHideEnd = -1) {
     const range = eligible ? { coveredFrom, coveredTo, keepRecent } : null;
     const hideEnd = Math.max(pendingHideEnd, range?.coveredTo ?? -1);
     if (hideEnd > pendingHideEnd) pendingCount = candidateCount;
-    return { range, hideEnd, hiddenCount, pendingCount, keptCount: chat.length - hiddenCount - pendingCount,
-        recentCount: Math.min(chat.length, keepRecent) };
+    return { range, coveredTo, hideEnd, hiddenCount, pendingCount, keptCount: messageCount - hiddenCount - pendingCount,
+        recentCount: Math.min(messageCount, keepRecent) };
 }
 
 export function summaryResultText(operation, tokens) {

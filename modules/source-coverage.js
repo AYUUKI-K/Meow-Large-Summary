@@ -3,17 +3,17 @@
 const normalize = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 
 export function createCoveragePlan(chat) {
-    return { chat: [...chat], sources: null, missing: null, observed: false };
+    return { chat: chat.slice(), sources: null, missing: null, observed: false };
 }
 
 export function captureCoverageSources(plan, coreChat) {
     if (!plan) return;
     // ST assigns index after filtering system messages, before regex/reasoning
     // and extension interceptors. Hidden tool messages can remain in that list.
-    const includesTools = coreChat.some(message => message.is_system);
+    const includesTools = coreChat.some(message => message?.is_system);
     const originals = plan.chat.map((message, index) => ({ message, index }))
-        .filter(({ message }) => !message.is_system || (includesTools && Array.isArray(message.extra?.tool_invocations)));
-    const byIndex = new Map(coreChat.filter(message => Number.isInteger(message.index)).map(message => [message.index, message]));
+        .filter(({ message }) => message && (!message.is_system || (includesTools && Array.isArray(message.extra?.tool_invocations))));
+    const byIndex = new Map(coreChat.filter(message => Number.isInteger(message?.index)).map(message => [message.index, message]));
     plan.sources = originals.flatMap(({ message, index }, coreIndex) => {
         if (message.is_system || !String(message.mes ?? '').trim()) return [];
         const processed = byIndex.get(coreIndex);

@@ -267,12 +267,15 @@ test('summary stream on an older WebView uses the existing host fetch bridge and
 const bookEntry = f => Object.values(f.writes.at(-1)?.data.entries ?? {}).find(entry =>
     entry.extensions?.auto_large_summary?.archiveId === f.api.evaluate('getContext().chatMetadata.auto_large_summary?.archiveId'));
 
-for (const scenario of ['full', 'trimmed', 'transformed', 'missing-event', 'missing-interceptor', 'macro', 'text-full', 'text-trimmed']) {
+for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-event', 'missing-interceptor', 'macro', 'text-full', 'text-trimmed']) {
     test(`summary coverage ${scenario}: no extra model call and no unsafe hide`, async () => {
         const f = await fixture({ autoEnabled: false, streamSummary: false });
         f.prepareSummary({ nativeRequest: true, coverage: true });
         const textCompletion = scenario.startsWith('text-');
         f.context.mainApi = textCompletion ? 'kobold' : 'openai';
+        if (scenario === 'sparse') {
+            for (const index of [2, 23, 29]) delete f.context.chat[index];
+        }
         const original = structuredClone(f.context.chat);
         const fetch = f.sandbox.fetch;
         let calls = 0;
@@ -284,7 +287,7 @@ for (const scenario of ['full', 'trimmed', 'transformed', 'missing-event', 'miss
         };
         f.context.generate = async () => {
             f.api.onGenerationAfterCommands('quiet', {}, false);
-            const core = f.context.chat.map((message, index) => ({ ...message, index }));
+            const core = f.context.chat.filter(message => !message.is_system).map((message, index) => ({ ...message, index }));
             if (scenario === 'transformed') core[0].mes = '<% if (true) { %>楼层零<% } %>';
             if (scenario === 'macro') {
                 core[0].mes = '{{user}}的承诺';
@@ -308,10 +311,15 @@ for (const scenario of ['full', 'trimmed', 'transformed', 'missing-event', 'miss
             return (await response.json()).choices[0].message.content;
         };
         const completed = await f.api.runLargeSummary({ manual: true });
-        const passes = ['full', 'transformed', 'macro', 'text-full'].includes(scenario);
+        const passes = ['full', 'sparse', 'transformed', 'macro', 'text-full'].includes(scenario);
         assert.equal(calls, passes ? 1 : 0);
         assert.equal(Boolean(completed), passes);
-        assert.deepEqual(f.executed, passes ? ['/hide 0-9'] : []);
+        const expectedHide = scenario === 'sparse' ? '/hide 0-7' : '/hide 0-9';
+        assert.deepEqual(f.executed, passes ? [expectedHide] : []);
+        if (scenario === 'sparse') {
+            assert.equal(f.context.chat.filter(message => !message.is_system).length, 20);
+            assert.equal(bookEntry(f).extensions.auto_large_summary.lastOperation.changes.length, 7);
+        }
         assert.equal(f.api.state().sendLockDepth, 0);
         assert.equal(f.handlers.get('prompt-ready')?.size ?? 0, 0, 'observer removed');
         assert.equal(f.handlers.get('after-data')?.size ?? 0, 0, 'text observer removed');
@@ -588,7 +596,11 @@ async function fixture(savedSettings = {}, storageData = new Map(), extensionFol
         async executeSlashCommandsWithOptions(command) {
             executed.push(command);
             const visibility = /^\/(hide|unhide) (\d+)-(\d+)$/.exec(command);
-            if (visibility) for (let i = Number(visibility[2]); i <= Math.min(Number(visibility[3]), this.chat.length - 1); i++) this.chat[i].is_system = visibility[1] === 'hide';
+            if (visibility) {
+                for (let i = Number(visibility[2]); i <= Math.min(Number(visibility[3]), this.chat.length - 1); i++) {
+                    if (this.chat[i]) this.chat[i].is_system = visibility[1] === 'hide';
+                }
+            }
             return {};
         },
     };
@@ -3023,6 +3035,26 @@ test('edits to the retained recent messages during generation also discard the s
     await f.api.runLargeSummary();
     assert.equal(f.writes.length, 0);
     assert.equal(f.executed.length, 0);
+});
+
+test('filling a gap during generation discards the summary before saving or hiding', async () => {
+    const f = await fixture();
+    f.prepareSummary();
+    delete f.context.chat[1];
+    let generated = false;
+    f.context.fillGap = () => {
+        generated = true;
+        f.context.chat[1] = { mes: '补回的原文' };
+    };
+    f.api.evaluate(`requestMainApiSummary = async () => {
+        getContext().fillGap();
+        return '缺少补回原文的总结';
+    };`);
+    await f.api.runLargeSummary();
+    assert.equal(generated, true);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.executed.length, 0);
+    assert.equal(f.api.state().sendLockDepth, 0);
 });
 
 test('explicit cancellation discards the result and clears task controls without disabling the plugin', async () => {

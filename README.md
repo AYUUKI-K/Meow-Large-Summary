@@ -4,7 +4,7 @@
 
 meow 系列的 SillyTavern 长聊天记忆插件。聊天变长时，把已经发生的剧情整理进世界书，再隐藏旧消息，保留最近原文继续对话。原始消息仍在聊天档里，需要时可以恢复。
 
-作者：NUE-喵喵电波 · 当前版本：1.3.0
+作者：NUE-喵喵电波 · 当前版本：1.3.1
 
 ## 能做什么
 
@@ -26,9 +26,17 @@ meow 系列的 SillyTavern 长聊天记忆插件。聊天变长时，把已经�
 
 3. 在扩展列表展开 **喵喵大总结**，或点击悬浮入口打开面板。
 
-旧地址 `Mewo-Large-Summary` 仍由 GitHub 重定向。已经安装的用户继续在原插件中更新即可，无需卸载、改安装目录或重复安装；设置、世界书和总结记录保持原样。
+旧地址 `Mewo-Large-Summary` 仍由 GitHub 重定向。已有用户可在插件里点击“检查更新”，完成后会自动刷新。
 
-已有用户可在插件里点击“检查更新”；更新完成后会自动刷新。
+如果旧安装报 `refusing to merge unrelated histories`，它的 Git 历史与当前主线已经分开。能使用 Git 的用户可在**已安装的喵喵大总结插件目录**中运行 `git status --short --branch`。确认当前分支是 `main` 且没有本地文件改动后，依次运行以下命令。旧版本保存在备份分支，扩展目录、聊天和世界书继续沿用。
+
+```sh
+git fetch origin
+git branch -m backup/before-history-migration
+git switch -c main --track origin/main
+```
+
+每条命令成功后再执行下一条，完成后刷新酒馆页面。后续版本可继续用“检查更新”。
 
 ## 快速上手
 

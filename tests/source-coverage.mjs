@@ -21,6 +21,16 @@ test('duplicate lines need distinct occurrences and removed messages stay missin
     assert.deepEqual(missingCoverage(plan.sources, 'A B'), [0]);
 });
 
+test('coverage reports original floor numbers after empty slots and hidden messages', () => {
+    const chat = new Array(8);
+    chat[1] = { mes: 'hidden', is_system: true };
+    chat[3] = { mes: 'first visible' };
+    chat[7] = { mes: 'last visible' };
+    const plan = createCoveragePlan(chat);
+    captureCoverageSources(plan, [{ index: 0, mes: 'first visible' }]);
+    assert.deepEqual(missingCoverage(plan.sources, 'first visible'), [7]);
+});
+
 test('hidden tool messages do not shift visible floor mapping', () => {
     const chat = [{ mes: '工具', is_system: true, extra: { tool_invocations: [] } }, { mes: '剧情' }];
     const plan = createCoveragePlan(chat);

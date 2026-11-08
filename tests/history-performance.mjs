@@ -66,7 +66,7 @@ test('single-pass scope agrees with previous visibility boundaries across mixed 
         const hideEnd = Math.max(pendingHideEnd, range?.coveredTo ?? -1);
         const hiddenCount = chat.filter(message => message.is_system).length;
         const pendingCount = chat.filter((message, index) => index <= hideEnd && !message.is_system).length;
-        return { range, hideEnd, hiddenCount, pendingCount, keptCount: chat.length - hiddenCount - pendingCount,
+        return { range, coveredTo: Math.max(-1, coveredTo), hideEnd, hiddenCount, pendingCount, keptCount: chat.length - hiddenCount - pendingCount,
             recentCount: Math.min(chat.length, keepRecent) };
     };
     for (let n = 0; n < 90; n++) {
@@ -79,6 +79,22 @@ test('single-pass scope agrees with previous visibility boundaries across mixed 
     const long = Array.from({ length: 1000 }, () => ({ get mes() { bodyReads++; return '有效原文'; } }));
     assert.ok(summaryScope(long, 20).range);
     assert.equal(bodyReads, 1, 'finding eligible work must not trim every remaining body');
+});
+
+test('gaps keep absolute floor numbers and never consume a retained message slot', () => {
+    const chat = new Array(10);
+    chat[1] = { mes: 'already hidden', is_system: true };
+    chat[4] = { mes: 'old' };
+    chat[6] = { mes: 'retained' };
+    chat[8] = { mes: 'latest' };
+    assert.deepEqual(summaryScope(chat, 2), {
+        range: { coveredFrom: 0, coveredTo: 4, keepRecent: 2 }, coveredTo: 4, hideEnd: 4,
+        hiddenCount: 1, pendingCount: 1, keptCount: 2, recentCount: 2,
+    });
+    assert.deepEqual(summaryScope(chat, 2, 4, 6), {
+        range: null, coveredTo: 4, hideEnd: 6, hiddenCount: 1, pendingCount: 2, keptCount: 1, recentCount: 2,
+    });
+    assert.equal(summaryScope(new Array(5), 2).recentCount, 0);
 });
 
 test('coverage captures immutable text once and preserves multimodal order and macro fallback', () => {

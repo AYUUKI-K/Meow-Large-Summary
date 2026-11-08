@@ -18,7 +18,7 @@ import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.3.0';
+const EXTENSION_VERSION = '1.3.1';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -1755,7 +1755,7 @@ async function recoverLatestSummary(action) {
                 summaryHideInProgress = true;
                 try {
                     const result = await context.executeSlashCommandsWithOptions(`/${hidden ? 'hide' : 'unhide'} ${start}-${end}`);
-                    if (result?.isError || context.chat.slice(start, end + 1).some(message => Boolean(message.is_system) !== hidden)) {
+                    if (result?.isError || context.chat.slice(start, end + 1).some(message => message && Boolean(message.is_system) !== hidden)) {
                         throw new Error('楼层状态未全部更新，可稍后重试。');
                     }
                 } finally { summaryHideInProgress = false; }
@@ -1771,7 +1771,7 @@ async function recoverLatestSummary(action) {
                 const operation = entryMetadata(target).lastOperation;
                 if (hidden) {
                     operation.phase = 'complete';
-                    operation.result = { newHidden: journal.changes.length, keptVisible: context.chat.filter(message => !message.is_system).length };
+                    operation.result = { newHidden: journal.changes.length, keptVisible: context.chat.filter(message => message && !message.is_system).length };
                     delete operation.messagesRestored;
                 }
                 else { operation.messagesRestored = true; delete operation.combinedRestorePending; }
@@ -1810,6 +1810,7 @@ function eligibleUncoveredRange(context, archiveInfo, manual) {
 
 function captureMessageRange(chat, endIndex) {
     return chat.slice(0, endIndex + 1).map(message => ({
+        empty: message == null,
         mes: String(message?.mes ?? ''),
         is_user: Boolean(message?.is_user),
         is_system: Boolean(message?.is_system),
@@ -1820,14 +1821,18 @@ function captureMessageRange(chat, endIndex) {
 
 function messageRangeMatches(chat, snapshot) {
     if (chat.length < snapshot.length) return false;
-    return snapshot.every((saved, index) => {
+    for (let index = 0; index < snapshot.length; index++) {
+        if ((index in snapshot) !== (index in chat)) return false;
+        const saved = snapshot[index];
+        if (!saved) continue;
         const current = chat[index];
-        return String(current?.mes ?? '') === saved.mes
-            && Boolean(current?.is_user) === saved.is_user
-            && Boolean(current?.is_system) === saved.is_system
-            && String(current?.name ?? '') === saved.name
-            && messageFingerprint(current) === saved.fingerprint;
-    });
+        if ((current == null) !== saved.empty || String(current?.mes ?? '') !== saved.mes
+            || Boolean(current?.is_user) !== saved.is_user
+            || Boolean(current?.is_system) !== saved.is_system
+            || String(current?.name ?? '') !== saved.name
+            || messageFingerprint(current) !== saved.fingerprint) return false;
+    }
+    return true;
 }
 
 async function waitForCurrentGeneration(context, expectedChatId) {
@@ -1951,7 +1956,7 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         const range = operation === 'compact'
             ? { coveredFrom: entryMetadata(beforeEntry)?.coveredFrom ?? 0, coveredTo: entryMetadata(beforeEntry)?.coveredTo ?? -1, keepRecent }
             : operation === 'rebuild'
-                ? { coveredFrom: 0, coveredTo: Math.max(-1, context.chat.length - keepRecent - 1), keepRecent }
+                ? { coveredFrom: 0, coveredTo: summaryScope(context.chat, keepRecent).coveredTo, keepRecent }
                 : eligibleUncoveredRange(context, archiveInfo, manual);
         if (!range) {
             setStatus('没有可总结的旧楼层，可以继续对话。');
@@ -1975,7 +1980,7 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         if (operation === 'rebuild') prompt = sourceTaskPrompt('沿用有效旧总结并更新后续记忆', prompt,
             `【已验证有效的旧总结，覆盖至第 ${checkpoint.sourceEnd} 层】\n${checkpoint.content}\n\n`
             + `【后续原文，从第 ${checkpoint.sourceEnd + 1} 层开始；包含这一区间内的隐藏消息】\n`
-            + context.chat.slice(checkpoint.sourceEnd + 1).map((message, offset) =>
+            + context.chat.slice(checkpoint.sourceEnd + 1).map((message, offset) => message == null ? '' :
                 `[第 ${checkpoint.sourceEnd + 1 + offset} 层 · ${message.name ?? (message.is_user ? '用户' : '角色')}]\n${message.mes ?? ''}`).join('\n\n'));
         if (!String(prompt ?? '').trim()) throw new Error('总结提示词为空。');
         assertSummaryActive();
@@ -2188,14 +2193,14 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
                 summaryHideInProgress = false;
             }
             assertSummaryActive();
-            if (result?.isError || liveContext.chat.slice(hideStart, hideEnd + 1).some(message => !message.is_system)) {
+            if (result?.isError || liveContext.chat.slice(hideStart, hideEnd + 1).some(message => message && !message.is_system)) {
                 throw new Error('总结已保存，但旧楼层未全部隐藏，请检查 /hide 命令。');
             }
         }
         if (operation !== 'compact') await updateSavedOperation(liveContext, archiveInfo, operationId, entry => {
             const savedOperation = entryMetadata(entry).lastOperation;
             savedOperation.phase = 'complete';
-            savedOperation.result = { newHidden: journal.changes.length, keptVisible: liveContext.chat.filter(message => !message.is_system).length };
+            savedOperation.result = { newHidden: journal.changes.length, keptVisible: liveContext.chat.filter(message => message && !message.is_system).length };
         });
         currentArchive.autoTriggerArmed = false;
         await liveContext.saveMetadata?.();
@@ -3051,8 +3056,9 @@ function syncActionState() {
     const retain = ui.querySelector('.als-retain-memory');
     if (retain) retain.hidden = !archive?.sourceChanged || !entry?.content?.trim();
     const current = getCharacterAndChat(context);
-    const total = context?.chat?.length ?? 0;
-    const autoState = automaticStatus(settings, archive, journal, { hasChat: Boolean(current), busy: Boolean(sendLockDepth), hasWork: Boolean(scope.range), chatLength: total });
+    const total = scope.hiddenCount + scope.pendingCount + scope.keptCount;
+    const autoState = automaticStatus(settings, archive, journal, { hasChat: Boolean(current), busy: Boolean(sendLockDepth),
+        hasWork: Boolean(scope.range), chatLength: context?.chat?.length ?? 0 });
     setUiText('.als-chat-title', current?.chatName ?? '请选择一个聊天存档');
     setUiText('.als-chat-detail', current ? `${current.characterName} · ${total} 条消息 · ${entry ? archiveRecords(entry).length : 0} 次总结记录` : '打开单人聊天后即可整理与保存记忆。');
     setUiText('.als-state-badge', autoState.label);
