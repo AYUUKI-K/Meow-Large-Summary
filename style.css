@@ -228,7 +228,8 @@
 .als-reader-plain { white-space: pre-wrap; }
 .als-settings .als-preview { resize: vertical; min-height: 280px; max-height: 65vh; line-height: 1.8; font-family: ui-monospace, Consolas, monospace; }
 .als-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.als-manage .als-actions { margin-top: 12px; }
+.als-record-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.als-archive-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
 body.als-send-locked :is(#send_but, #option_continue, #option_regenerate, .swipe_left, .swipe_right) { opacity: .45; cursor: wait; }
 /* Body-mounted floating UI stays above host drawers/menus and custom theme layers.
    Native modal dialogs remain above it in the browser's top layer. Embedded panels

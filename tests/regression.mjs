@@ -2885,6 +2885,112 @@ test('a fresh branch receives its own identity and never inherits summaries exte
     assert.deepEqual(parentAfter.extensions, parent.extensions);
 });
 
+test('ordinary new chats start without memory; explicitly importing a same-card summary creates an independent first record', async () => {
+    const f = await fixture({ autoEnabled: false });
+    const source = ownedSummaryEntry(0, 'previous');
+    source.extensions.auto_large_summary.chatName = '旧档';
+    f.sandbox.__fixtures.source = source;
+    await f.context.saveWorldInfo('喵喵大总结世界书', {entries:{0:source}});
+    f.api.evaluate('activateWorldBook = async () => {}; updateWorldBookStatus = async () => {};');
+    await f.api.evaluate('syncCurrentArchive()');
+    assert.equal(f.api.evaluate('currentSummaryEntry'), null);
+    const originalChat = structuredClone(f.context.chat);
+    f.sandbox.window.confirm = () => false;
+    await f.api.evaluate('carrySummary(__fixtures.source, {intoCurrent:true})');
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingContinuation, undefined);
+    assert.equal(Object.keys(f.sandbox.__fixtures.book().entries).length, 1);
+    f.sandbox.window.confirm = () => true;
+    await f.api.evaluate('carrySummary(__fixtures.source, {intoCurrent:true})');
+    const target = bookEntry(f);
+    assert.notEqual(target.extensions.auto_large_summary.archiveId, 'previous');
+    assert.equal(target.content, source.content);
+    assert.equal(target.constant, true);
+    assert.equal(target.extensions.auto_large_summary.records[0].operation, 'carry');
+    assert.equal(target.extensions.auto_large_summary.lastOperation, undefined);
+    assert.equal(f.context.chatMetadata.auto_large_summary.lastSummarizedThrough, -1);
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingContinuation, undefined);
+    assert.deepEqual(f.context.chat, originalChat);
+    assert.deepEqual(f.executed, []);
+    assert.equal(f.sandbox.__fixtures.book().entries[0].disable, true);
+    assert.equal(f.api.evaluate('branchRecords(archiveRecords(currentSummaryEntry), [])[0].operation'), 'carry');
+    const writes = f.writes.length;
+    await f.api.evaluate('carrySummary(__fixtures.source, {intoCurrent:true})');
+    assert.equal(f.writes.length, writes);
+});
+
+test('a failed continuation metadata save can be retried without duplicating the world-book copy', async () => {
+    const f = await fixture({autoEnabled:false});
+    const archive = (await f.api.evaluate('ensureArchive()')).archive;
+    archive.pendingContinuation = {id:archive.archiveId, cardKey:'a.png', bookName:archive.worldBookName,
+        fromChat:'源存档', content:'已保存的接续记忆', createdAt:'2026-11-12'};
+    await f.context.saveWorldInfo(archive.worldBookName, {entries:{0:ownedSummaryEntry(0,'previous')}});
+    f.api.evaluate('activateWorldBook = async () => {}; updateWorldBookStatus = async () => {};');
+    f.context.saveMetadata = async () => { if (!archive.pendingContinuation) throw Error('metadata write failed'); };
+    await assert.rejects(f.api.evaluate('syncCurrentArchive()'), /metadata write failed/);
+    assert.ok(archive.pendingContinuation);
+    let aborted = false;
+    f.interceptor([], 1000, () => { aborted = true; }, 'normal');
+    assert.equal(aborted, true);
+    const first = bookEntry(f);
+    f.context.saveMetadata = async () => {};
+    await f.api.evaluate('syncCurrentArchive()');
+    assert.equal(archive.pendingContinuation, undefined);
+    const persisted = f.sandbox.__fixtures.book().entries;
+    assert.equal(Object.keys(persisted).length, 2);
+    assert.equal(persisted[first.uid].extensions.auto_large_summary.records.length, 1);
+    assert.equal(persisted[first.uid].content, '已保存的接续记忆');
+});
+
+test('creating a continuation imports only its header and never opens the result on a different character', async () => {
+    const f = await fixture({autoEnabled:false});
+    const entry = ownedSummaryEntry(0,'previous');
+    entry.extensions.auto_large_summary.chatName = '旧档';
+    f.sandbox.__fixtures.source = entry;
+    f.sandbox.FormData = FormData;
+    f.sandbox.Blob = Blob;
+    await f.context.saveWorldInfo('喵喵大总结世界书', {entries:{0:entry}});
+    f.context.openCharacterChat = () => assert.fail('wrong character');
+    const fetch = f.sandbox.fetch;
+    let uploads = 0;
+    f.sandbox.fetch = async (url, init) => {
+        if (url !== '/api/chats/import') return fetch(url, init);
+        uploads++;
+        const lines = (await init.body.get('avatar').text()).split('\n');
+        assert.equal(lines.length, 1);
+        const header = JSON.parse(lines[0]);
+        assert.equal(header.chat_metadata.auto_large_summary.pendingContinuation.content, entry.content);
+        assert.notEqual(header.chat_metadata.auto_large_summary.archiveId, 'previous');
+        f.setContext({...f.context, characterId:undefined});
+        return Response.json({res:true,fileNames:['new.jsonl']});
+    };
+    await f.api.evaluate('carrySummary(__fixtures.source)');
+    assert.equal(uploads, 1);
+    assert.equal(f.api.state().sendLockDepth, 0);
+    assert.equal(Object.keys(f.sandbox.__fixtures.book().entries).length, 1);
+});
+
+test('round deletion uses the record the user selected and refuses a stale list index', async () => {
+    const f = await fixture({autoEnabled:false});
+    const entry = ownedSummaryEntry(2,'previous');
+    const meta = entry.extensions.auto_large_summary;
+    meta.characterName = '角色 A';
+    meta.chatName = '旧故事';
+    meta.records.push({round:2, mode:'incremental', content:'第二轮'});
+    const book = {entries:{2:entry}};
+    await f.context.saveWorldInfo('喵喵大总结世界书', book);
+    f.api.evaluate(`directoryData = __fixtures.book(); selectedSummary = {uid:2, archiveId:'previous', bookName:settings.worldBookName};
+        syncCurrentArchive = async () => {}; renderDirectory = async () => {}; showSummary = () => {};`);
+    f.controls.get('.als-history-select').value = '0';
+    meta.records.shift();
+    await f.context.saveWorldInfo('喵喵大总结世界书', book);
+    const writes = f.writes.length;
+    await assert.rejects(f.api.evaluate('deleteSummarySelection({roundOnly:true})'), /轮次已变动/);
+    assert.equal(f.writes.length, writes);
+    f.api.evaluate('directoryData = __fixtures.book()');
+    await f.api.evaluate('deleteSummarySelection({roundOnly:true})');
+    assert.equal(f.sandbox.__fixtures.book().entries[2], undefined);
+});
+
 test('branch inheritance uses actual source endpoint, not the earlier hide boundary', async () => {
     const f = await fixture();
     f.prepareSummary();

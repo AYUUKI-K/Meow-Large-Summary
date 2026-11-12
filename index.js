@@ -18,7 +18,7 @@ import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.3.1';
+const EXTENSION_VERSION = '1.4.0';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -1204,6 +1204,7 @@ async function ensureArchive(context = getContext()) {
         archive.archiveId = randomId();
         if (archive.archiveId === previousId) archive.archiveId += `-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         delete archive.branch;
+        delete archive.pendingContinuation;
         if (transition === 'branch') archive.branch = {
             parentArchiveId: previousId, parentChatId, point: context.chat.length - 1, pending: true, needsRebuild: false,
         };
@@ -1276,6 +1277,53 @@ function archiveRecords(entry) {
         content: String(entry.content ?? ''), createdAt: meta?.createdAt,
         coveredFrom: meta?.coveredFrom ?? 0, coveredTo: meta?.coveredTo ?? -1,
     }];
+}
+
+function buildSummaryEntry(uid, content, meta, active, existingEntry) {
+    return {
+        ...existingEntry,
+        uid,
+        key: [],
+        keysecondary: [],
+        comment: `喵喵大总结 · ${meta.characterName} · ${meta.chatName}`.slice(0, 100),
+        content,
+        constant: active,
+        vectorized: false,
+        selective: true,
+        selectiveLogic: 0,
+        addMemo: false,
+        order: 100,
+        position: 4,
+        disable: !active,
+        ignoreBudget: false,
+        excludeRecursion: false,
+        preventRecursion: true,
+        matchPersonaDescription: false,
+        matchCharacterDescription: false,
+        matchCharacterPersonality: false,
+        matchCharacterDepthPrompt: false,
+        matchScenario: false,
+        matchCreatorNotes: false,
+        delayUntilRecursion: 0,
+        probability: 100,
+        useProbability: true,
+        depth: Math.max(0, Math.floor(Number(settings.depth) || 0)),
+        outletName: '',
+        group: '',
+        groupOverride: false,
+        groupWeight: 100,
+        scanDepth: null,
+        caseSensitive: null,
+        matchWholeWords: null,
+        useGroupScoring: null,
+        automationId: '',
+        role: 0,
+        sticky: null,
+        cooldown: null,
+        delay: null,
+        triggers: [],
+        extensions: { ...existingEntry?.extensions, [ENTRY_MARKER]: meta },
+    };
 }
 
 function consolidateArchive(data, archiveId, candidates = listOwnedEntries(data)) {
@@ -1400,6 +1448,123 @@ async function initializeBranchArchive(context, archiveInfo, data) {
     archiveInfo.archive.round = last?.round ?? 0;
     try { await context.saveMetadata?.(); }
     catch (error) { branch.pending = true; throw error; }
+}
+
+// A header-only chat leaves the greeting to the host. Its pending copy survives
+// reloads until the destination's own world-book entry has been saved and read back.
+async function createContinuationChat(context, source, pendingContinuation) {
+    const header = { user_name: context.name1 ?? 'User', character_name: source.characterName,
+        chat_metadata: { [MODULE_NAME]: { archiveId: pendingContinuation.id, cardKey: source.cardKey, worldBookName: pendingContinuation.bookName, pendingContinuation } } };
+    const form = new FormData();
+    form.set('file_type', 'jsonl');
+    form.set('avatar_url', source.character.avatar);
+    form.set('character_name', source.characterName);
+    form.set('user_name', header.user_name);
+    form.set('avatar', new Blob([JSON.stringify(header)], { type: 'application/jsonl' }), 'continuation.jsonl');
+    const response = await fetch('/api/chats/import', { method: 'POST', body: form,
+        headers: context.getRequestHeaders({ omitContentType: true }) });
+    if (!response.ok) throw new Error(`创建接续聊天失败（HTTP ${response.status}）。`);
+    const result = await response.json();
+    const file = result.fileNames?.[0];
+    if (!result.res || typeof file !== 'string' || !/^[^/\\]+\.jsonl$/i.test(file)) {
+        throw new Error('酒馆未确认新聊天文件，请在聊天列表核实。');
+    }
+    return file.slice(0, -6);
+}
+
+function canImportInto(context) {
+    const archive = context?.chatMetadata?.[MODULE_NAME];
+    return Boolean(getCharacterAndChat(context) && archive?.archiveId && !archive.round && !archive.pendingContinuation
+        && !archive.pendingSummarySave && !archive.branch?.needsRebuild && !archive.branch?.pending && !currentSummaryEntry);
+}
+
+async function carrySummary(entry, { intoCurrent = false } = {}) {
+    const context = getContext();
+    const source = getCharacterAndChat(context);
+    const meta = entryMetadata(entry);
+    const bookName = settings.worldBookName;
+    if (!settings.enabled || sendLockDepth || archiveEditInProgress || !source
+        || !meta || meta.cardKey !== source.cardKey || !entry.content?.trim()) return;
+    if (intoCurrent && !canImportInto(context)) return;
+    if (!intoCurrent && typeof context.openCharacterChat !== 'function') throw new Error('当前酒馆缺少打开单人聊天接口。');
+    const revision = enabledRevision;
+    const originalArchiveId = context.chatMetadata?.[MODULE_NAME]?.archiveId;
+    const stillHere = () => settings.enabled && enabledRevision === revision && settings.worldBookName === bookName
+        && getCharacterAndChat()?.cardKey === source.cardKey && getCharacterAndChat()?.chatId === source.chatId
+        && getContext()?.chatMetadata?.[MODULE_NAME]?.archiveId === originalArchiveId;
+    archiveEditInProgress = true;
+    lockSending();
+    let chatName;
+    const archiveId = intoCurrent ? originalArchiveId : randomId();
+    try {
+        const native = await nativeScript();
+        if (!stillHere()) return;
+        if (native.is_send_press || native.isGenerating?.() || (context.streamingProcessor && !context.streamingProcessor.isFinished)) {
+            throw new Error('请等本轮回复结束后再导入总结。');
+        }
+        const book = await prepareWorldBook(context, bookName, { create: false });
+        if (!stillHere()) return;
+        const saved = book?.entries?.[entry.uid];
+        if (!saved?.content?.trim() || entryMetadata(saved)?.archiveId !== meta.archiveId
+            || entryMetadata(saved)?.cardKey !== source.cardKey || saved.content !== entry.content) {
+            throw new Error('这份总结已变动，请刷新记录后再导入。');
+        }
+        const fromChat = meta.chatName || meta.chatId || '旧存档';
+        const pendingContinuation = { id: archiveId, bookName, cardKey: source.cardKey,
+            fromChat, content: saved.content, createdAt: new Date().toISOString() };
+        if (intoCurrent) {
+            if (!canImportInto(context) || listOwnedEntries(book).some(item => entryMetadata(item)?.archiveId === archiveId)) {
+                throw new Error('当前聊天已有总结，请选择尚无总结的聊天导入。');
+            }
+            if (!window.confirm(`将“${fromChat}”的已保存总结导入“${source.chatName}”？`)) return;
+            context.chatMetadata[MODULE_NAME].pendingContinuation = pendingContinuation;
+            await context.saveMetadata();
+            chatName = source.chatId;
+        } else {
+            chatName = await createContinuationChat(context, source, pendingContinuation);
+            if (!stillHere()) {
+                notify('info', `接续聊天已创建，可在“${source.characterName}”的聊天列表打开“${chatName}”。`);
+                return;
+            }
+            await context.openCharacterChat(chatName);
+        }
+    } catch (error) {
+        if (chatName) throw new Error(`接续聊天“${chatName}”已创建，可从角色的聊天列表重新打开。${error.message}`);
+        throw error;
+    } finally {
+        archiveEditInProgress = false;
+        unlockSending();
+    }
+    if (intoCurrent && stillHere()) await scheduleChatSync({ checkThreshold: false });
+    else await chatSyncChain;
+    if (getCharacterAndChat()?.chatId === chatName && getCharacterAndChat()?.cardKey === source.cardKey) {
+        if (entryMetadata(currentSummaryEntry)?.archiveId === archiveId && !getContext().chatMetadata?.[MODULE_NAME]?.pendingContinuation) {
+            notify('success', '已导入独立的总结，可以接着聊了。');
+        } else notify('warning', '独立总结尚未确认，请刷新世界书状态或重新打开这份聊天。');
+    }
+}
+
+function stageContinuation(info, data) {
+    const seed = info?.archive.pendingContinuation;
+    if (!seed || seed.id !== info.archive.archiveId || seed.cardKey !== info.cardKey || seed.bookName !== settings.worldBookName
+        || typeof seed.content !== 'string' || !seed.content.trim()) return false;
+    const existing = listOwnedEntries(data).find(entry => entryMetadata(entry)?.archiveId === seed.id);
+    if (existing) {
+        if (entryMetadata(existing)?.cardKey !== info.cardKey || !archiveRecords(existing).some(record => record.id === seed.id && record.operation === 'carry')) {
+            throw new Error('接续聊天的总结标识已被其他记录使用，请检查世界书。');
+        }
+        return true;
+    }
+    let uid = 0;
+    while (Object.hasOwn(data.entries, uid)) uid++;
+    const record = { id: seed.id, round: 1, mode: 'merged', operation: 'carry', content: seed.content, fromChat: seed.fromChat,
+        createdAt: seed.createdAt, coveredFrom: 0, coveredTo: -1, sourceEnd: -1, sourceDigest: historyDigest([], -1) };
+    const meta = { owner: MODULE_NAME, version: 1, storageVersion: 3, archiveId: seed.id, cardKey: info.cardKey,
+        characterName: info.characterName, chatId: info.chatId, chatName: info.chatName, chatIntegrity: info.archive.chatIntegrity,
+        round: 1, mode: record.mode, createdAt: seed.createdAt, updatedAt: seed.createdAt, coveredFrom: 0, coveredTo: -1,
+        sourceEnd: -1, sourceDigest: record.sourceDigest, records: [record] };
+    data.entries[uid] = buildSummaryEntry(uid, seed.content, meta, false);
+    return true;
 }
 
 async function updateWorldBookStatus({ refresh = true } = {}) {
@@ -1560,7 +1725,7 @@ function canSummarize(context = getContext(), automatic = false) {
     const pendingHide = meta?.archiveId === context?.chatMetadata?.[MODULE_NAME]?.archiveId
         && (meta?.lastOperation?.phase === 'saved' || meta?.lastOperation?.combinedRestorePending) && !meta.lastOperation.messagesRestored;
     return Boolean(settings?.enabled && (!automatic || settings.autoEnabled !== false)
-        && getCharacterAndChat(context) && settings.prompt?.trim()
+        && getCharacterAndChat(context) && !context.chatMetadata?.[MODULE_NAME]?.pendingContinuation && settings.prompt?.trim()
         && (!automatic || (!pendingHide && !context.chatMetadata?.[MODULE_NAME]?.branch?.needsRebuild
             && !context.chatMetadata?.[MODULE_NAME]?.sourceChanged
             && !context.chatMetadata?.[MODULE_NAME]?.coverageBlocked
@@ -1863,7 +2028,8 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         return;
     }
     if (!canSummarize(context, !manual)) {
-        if (manual) notify('warning', '请填写总结提示词。');
+        if (manual) notify('warning', context.chatMetadata?.[MODULE_NAME]?.pendingContinuation
+            ? '接续记忆尚未写入，请刷新世界书状态。' : '请填写总结提示词。');
         return;
     }
 
@@ -2072,54 +2238,10 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
                 id: operationId, operation, sourceEnd: recordSourceEnd, sourceDigest: recordSourceDigest,
             }],
         };
-        const title = `喵喵大总结 · ${meta.characterName} · ${meta.chatName}`.slice(0, 100);
         const expectedContent = mode === 'incremental' && existingEntry?.content?.trim()
             ? `${existingEntry.content.trim()}\n\n${String(summary).trim()}` : String(summary).trim();
         journal.resultDigest = textDigest(expectedContent);
-        data.entries[uid] = {
-            ...existingEntry,
-            uid,
-            key: [],
-            keysecondary: [],
-            comment: title,
-            content: expectedContent,
-            constant: true,
-            vectorized: false,
-            selective: true,
-            selectiveLogic: 0,
-            addMemo: false,
-            order: 100,
-            position: 4,
-            disable: false,
-            ignoreBudget: false,
-            excludeRecursion: false,
-            preventRecursion: true,
-            matchPersonaDescription: false,
-            matchCharacterDescription: false,
-            matchCharacterPersonality: false,
-            matchCharacterDepthPrompt: false,
-            matchScenario: false,
-            matchCreatorNotes: false,
-            delayUntilRecursion: 0,
-            probability: 100,
-            useProbability: true,
-            depth: Math.max(0, Math.floor(Number(settings.depth) || 0)),
-            outletName: '',
-            group: '',
-            groupOverride: false,
-            groupWeight: 100,
-            scanDepth: null,
-            caseSensitive: null,
-            matchWholeWords: null,
-            useGroupScoring: null,
-            automationId: '',
-            role: 0,
-            sticky: null,
-            cooldown: null,
-            delay: null,
-            triggers: [],
-            extensions: { ...existingEntry?.extensions, [ENTRY_MARKER]: meta },
-        };
+        data.entries[uid] = buildSummaryEntry(uid, expectedContent, meta, true, existingEntry);
         for (const entry of all) {
             if (entry.uid === uid) continue;
             entry.constant = false;
@@ -2293,6 +2415,11 @@ globalThis.meowLargeSummaryGenerationInterceptor = (_chat, _contextSize, abort, 
             abort(true);
             notify('info', '正在停用旧总结条目，完成后就能发送喵。', '', { preventDuplicates: true });
         }
+        return;
+    }
+    if (getContext()?.chatMetadata?.[MODULE_NAME]?.pendingContinuation) {
+        abort(true);
+        notify('info', '正在确认导入的总结。若导入未完成，可在概览点“重试导入总结”。', '', { preventDuplicates: true });
         return;
     }
     if (type === 'quiet' && summaryRequest?.interceptorPending && !summaryWasCancelled()) {
@@ -2479,7 +2606,17 @@ async function syncCurrentArchive() {
         delete archiveInfo.archive.archiveId;
         archiveInfo = await ensureArchive(context);
     }
-    if (existing && stillEnabled()) await setArchiveActivation(archiveInfo?.archive.archiveId ?? null, { reconcileCursor: true, bookData: existing });
+    if (!existing && archiveInfo?.archive.pendingContinuation?.bookName === settings.worldBookName) existing = await ensureWorldBook(context);
+    if (existing && stillEnabled() && (!archiveInfo || isSameArchive(getContext(), archiveInfo, context.characterId))) {
+        const carry = stageContinuation(archiveInfo, existing);
+        const activated = await setArchiveActivation(archiveInfo?.archive.archiveId ?? null, { reconcileCursor: true, bookData: existing });
+        if (carry && activated && isSameArchive(getContext(), archiveInfo, context.characterId)) {
+            const pending = archiveInfo.archive.pendingContinuation;
+            delete archiveInfo.archive.pendingContinuation;
+            try { await context.saveMetadata(); }
+            catch (error) { archiveInfo.archive.pendingContinuation = pending; throw error; }
+        }
+    }
     if (!stillEnabled()) return;
     syncActionState();
     // prepareWorldBook/activateWorldBook already refreshed the host's file list.
@@ -2510,7 +2647,8 @@ function scheduleChatSync({ checkThreshold = true } = {}) {
         if (checkThreshold && manualVisibilityRevision === startVisibilityRevision && current && canSummarize(context, true)) {
             await checkAfterReply({ chatId: current.chatId, characterId: context.characterId, onOpen: true, locked: false });
         } else {
-            setStatus(context.chatMetadata?.[MODULE_NAME]?.branch?.needsRebuild
+            setStatus(context.chatMetadata?.[MODULE_NAME]?.pendingContinuation ? '接续总结尚未确认，请在概览重试导入。'
+                : context.chatMetadata?.[MODULE_NAME]?.branch?.needsRebuild
                 ? '本分支的旧总结跨过分叉点或缺少来源信息，请从分支原文重建。'
                 : current ? (settings.autoEnabled ? '总结条目已同步。' : '自动总结已暂停，可手动总结；已有总结继续注入。') : '请选择角色卡的聊天存档。');
         }
@@ -2554,7 +2692,8 @@ function showSummary(entry, { refresh = false } = {}) {
     for (let index = records.length - 1; index >= 0; index--) {
         const record = records[index];
         const styleLabel = PROMPT_STYLE_LABELS[record.promptStyle];
-        const option = createElement('option', '', `第 ${record.round} 次 · ${record.operation === 'compact' ? '仅合并' : MODE_LABELS[record.mode] ?? '多次大总结'}${styleLabel ? ` · ${styleLabel}` : ''}${record.undone ? ' · 已撤销' : ''}`);
+        const kind = record.operation === 'carry' ? '接续记忆' : record.operation === 'compact' ? '仅合并' : MODE_LABELS[record.mode] ?? '多次大总结';
+        const option = createElement('option', '', `第 ${record.round} 次 · ${kind}${styleLabel ? ` · ${styleLabel}` : ''}${record.undone ? ' · 已撤销' : ''}`);
         option.value = String(index);
         select.append(option);
     }
@@ -2563,15 +2702,28 @@ function showSummary(entry, { refresh = false } = {}) {
     ui.querySelector('.als-preview').value = select.value === 'all' ? entry.content ?? '' : record?.content ?? '';
     if (!refresh) ui.querySelector('.als-preview').scrollTop = 0;
     ui.querySelector('.als-delete-round').disabled = !settings.enabled || select.value === 'all' || Boolean(sendLockDepth);
+    updateRecordImportActions(entry);
     ui.querySelector('.als-preview-box').hidden = false;
     const list = ui.querySelector('.als-directory-list');
     if (list) list.hidden = true;
-    const manage = ui.querySelector('.als-manage');
-    if (manage && !refresh) manage.open = false;
     const detail = ui.querySelector('.als-record-detail');
     if (detail) detail.textContent = sourceDescription(record);
     updateSummaryDisplay();
     if (!refresh) ui.querySelector('.als-preview-close')?.focus();
+}
+
+function updateRecordImportActions(entry) {
+    const context = getContext();
+    const meta = entryMetadata(entry);
+    const fullSummary = meta && ui.querySelector('.als-history-select')?.value === 'all'
+        && meta.cardKey === getCharacterAndChat(context)?.cardKey && entry.content?.trim();
+    for (const [selector, visible] of [
+        ['.als-carry-record', fullSummary],
+        ['.als-import-record', fullSummary && canImportInto(context) && meta.archiveId !== context.chatMetadata[MODULE_NAME].archiveId],
+    ]) {
+        const button = ui.querySelector(selector);
+        if (button) { button.hidden = !visible; button.disabled = !settings.enabled || Boolean(sendLockDepth); }
+    }
 }
 
 function updateSummaryDisplay(view) {
@@ -2600,10 +2752,10 @@ function closeSummaryPreview({ focus = true } = {}) {
     summaryReturnFocus = null;
 }
 
-async function deleteSummarySelection({ roundOnly = false } = {}) {
-    if (!settings.enabled || sendLockDepth || !selectedSummary || selectedSummary.bookName !== settings.worldBookName) return;
-    const selection = { ...selectedSummary };
+async function deleteSummarySelection({ roundOnly = false, selection = selectedSummary } = {}) {
+    if (!settings.enabled || sendLockDepth || !selection || selection.bookName !== settings.worldBookName) return;
     const selectedRound = ui.querySelector('.als-history-select').value;
+    const shownRecord = roundOnly && archiveRecords(directoryData?.entries?.[selection.uid] ?? {})[Number(selectedRound)];
     archiveEditInProgress = true;
     lockSending();
     try {
@@ -2615,9 +2767,11 @@ async function deleteSummarySelection({ roundOnly = false } = {}) {
         const meta = entryMetadata(entry);
         const records = archiveRecords(entry);
         const index = selectedRound === 'all' ? NaN : Number(selectedRound);
-        if (roundOnly && (!Number.isInteger(index) || !records[index])) return;
+        if (roundOnly && (!Number.isInteger(index) || !shownRecord || JSON.stringify(records[index]) !== JSON.stringify(shownRecord))) {
+            throw new Error('选中的轮次已变动，请刷新后再删除。');
+        }
         const message = roundOnly
-            ? `删除第 ${records[index].round} 次总结记录？将按剩余历史重建注入内容，已隐藏楼层不会自动恢复。`
+            ? `删除“${meta.characterName} / ${meta.chatName}”的第 ${records[index].round} 次总结？将按剩余历史重建注入内容，已隐藏楼层不会自动恢复。`
             : `删除“${meta.characterName} / ${meta.chatName}”的全部总结？已隐藏楼层不会自动恢复。`;
         if (!window.confirm(message)) return;
         let remaining = [];
@@ -2751,7 +2905,17 @@ async function renderDirectory({ reload = true } = {}) {
             arrow.innerHTML = uiIcon('arrow');
             line.append(copy, arrow);
             line.addEventListener('click', () => showSummary(row.entry));
-            details.append(line);
+            const item = createElement('div', 'als-archive-item');
+            const remove = createElement('button', 'als-text-button als-danger als-delete-archive', '删除');
+            remove.type = 'button';
+            remove.title = `删除“${row.meta.chatName}”的全部总结`;
+            remove.setAttribute('aria-label', remove.title);
+            remove.disabled = !settings.enabled || Boolean(sendLockDepth);
+            remove.addEventListener('click', () => void deleteSummarySelection({ selection: {
+                uid: row.entry.uid, archiveId: row.meta.archiveId, bookName,
+            } }).catch(error => notify('error', error.message)));
+            item.append(line, remove);
+            details.append(item);
         }
         tree.append(details);
     }
@@ -3035,12 +3199,19 @@ function syncActionState() {
         '.als-undo': busy || !journal || journal.phase === 'undone',
         '.als-undo-restore': busy || !journal || (journal.phase === 'undone' && !journal.combinedRestorePending),
         '.als-view-current': !entry,
+        '.als-carry-current': busy || !entry?.content?.trim(),
+        '.als-choose-import': busy || !canImportInto(context),
         '.als-refresh-context': busy,
     };
     for (const [selector, disabled] of Object.entries(controls)) {
         const button = ui.querySelector(selector);
         if (button) button.disabled = disabled;
     }
+    const chooseImport = ui.querySelector('.als-choose-import');
+    if (chooseImport) chooseImport.hidden = !canImportInto(context);
+    const carryCurrent = ui.querySelector('.als-carry-current');
+    if (carryCurrent) carryCurrent.hidden = !entry?.content?.trim();
+    if (selectedSummary) updateRecordImportActions(directoryData?.entries?.[selectedSummary.uid]);
     setUiText('.als-undo-restore', journal?.combinedRestorePending ? '继续恢复本次原文' : '撤销本次整理并恢复原文');
     const rebuild = ui.querySelector('.als-rebuild');
     if (rebuild) {
@@ -3078,6 +3249,7 @@ function syncActionState() {
     setUiText('.als-runtime-style', PROMPT_STYLE_LABELS[settings.promptStyle]);
     setUiText('.als-runtime-api', settings.apiMode === 'secondary' ? '副 API' : '主 API');
     setUiText('.als-action-context', !settings.enabled ? '启用插件后可整理；记录页仍可查看历史。'
+        : archive?.pendingContinuation ? `接续记忆尚未写入，请检查世界书“${archive.pendingContinuation.bookName}”并刷新。`
         : archive?.pendingSummarySave ? '上次写入结果尚未确认，请先刷新世界书状态。'
         : journal?.combinedRestorePending && !journal.messagesRestored ? '总结已撤销，原文尚未全部恢复。继续恢复不会再次撤销或重新生成。'
         : archive?.sourceChanged ? '原文已改变，请选择更新记忆或保留现有总结。确认前暂停自动总结，仍可继续聊天。'
@@ -3089,7 +3261,8 @@ function syncActionState() {
         : '没有可处理的旧消息：旧消息已总结、已隐藏或正文为空。可继续聊天或仅合并已有总结。');
     setUiText('.als-summary-result', summaryResultText(journal));
     setUiText('.als-token-comparison', tokenComparisonText(archive?.lastSummaryTokens, journal));
-    const suggested = archive?.pendingSummarySave ? ['.als-book-check', '确认上次操作结果']
+    const suggested = archive?.pendingContinuation ? ['.als-book-check', '重试导入总结']
+        : archive?.pendingSummarySave ? ['.als-book-check', '确认上次操作结果']
         : journal?.combinedRestorePending && !journal.messagesRestored ? ['.als-undo-restore', '继续恢复本次原文']
         : needsRebuild || archive?.coverageBlocked ? ['.als-rebuild', '更新记忆（从有效总结接续）']
         : journal?.phase === 'saved' && !journal.messagesRestored && journal.hideEnd >= 0 ? ['.als-retry-hide', '只重试隐藏（不重新生成）']
@@ -3503,6 +3676,31 @@ async function renderSettings() {
         const entry = listOwnedEntries(directoryData).find(item => entryMetadata(item)?.archiveId === id);
         if (entry) showSummary(entry);
     });
+    ui.querySelector('.als-carry-current').addEventListener('click', () =>
+        void carrySummary(currentSummaryEntry).catch(error => notify('error', error.message)));
+    ui.querySelector('.als-choose-import').addEventListener('click', async () => {
+        const current = getCharacterAndChat();
+        if (!current || !canImportInto(getContext())) return;
+        closeSummaryPreview({ focus: false });
+        ui.querySelector('.als-directory-search').value = '';
+        directoryPage = 0;
+        await showTab('directory');
+        if (getCharacterAndChat()?.chatId !== current.chatId || getCharacterAndChat()?.cardKey !== current.cardKey) return;
+        if (!summaryRows(directoryData).some(row => row.meta.cardKey === current.cardKey && row.entry.content?.trim())) {
+            notify('info', '这个角色还没有可导入的旧档总结。');
+            return;
+        }
+        ui.querySelector('.als-card-filter').value = current.cardKey;
+        await renderDirectory({ reload: false });
+        ui.querySelector('.als-archive-row')?.focus();
+    });
+    for (const [selector, intoCurrent] of [['.als-carry-record', false], ['.als-import-record', true]]) {
+        ui.querySelector(selector).addEventListener('click', () => {
+            if (selectedSummary?.bookName === settings.worldBookName && ui.querySelector('.als-history-select').value === 'all') {
+                void carrySummary(directoryData?.entries?.[selectedSummary.uid], { intoCurrent }).catch(error => notify('error', error.message));
+            }
+        });
+    }
     ui.querySelector('.als-refresh-context').addEventListener('click', () => {
         if (!settings.enabled || sendLockDepth) return;
         setStatus('正在重新计算当前上下文 token…');
@@ -3512,7 +3710,8 @@ async function renderSettings() {
         ui.querySelector(selector).addEventListener('click', () => void recoverLatestSummary(action));
     }
     ui.querySelector('.als-book-check').addEventListener('click', () => {
-        if (getContext()?.chatMetadata?.[MODULE_NAME]?.pendingSummarySave) void scheduleChatSync({ checkThreshold: false });
+        const archive = getContext()?.chatMetadata?.[MODULE_NAME];
+        if (archive?.pendingSummarySave || archive?.pendingContinuation) void scheduleChatSync({ checkThreshold: false });
         else void updateWorldBookStatus();
     });
     for (const selector of ['.als-directory-search', '.als-card-filter']) {
@@ -3536,6 +3735,7 @@ async function renderSettings() {
         ui.querySelector('.als-preview').scrollTop = 0;
         ui.querySelector('.als-record-detail').textContent = sourceDescription(event.target.value === 'all' ? activeRecords(archiveRecords(entry)).at(-1) : record);
         ui.querySelector('.als-delete-round').disabled = !settings.enabled || event.target.value === 'all' || Boolean(sendLockDepth);
+        updateRecordImportActions(entry);
         updateSummaryDisplay();
     });
     ui.querySelector('.als-preview-close').addEventListener('click', () => closeSummaryPreview());

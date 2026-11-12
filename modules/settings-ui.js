@@ -57,6 +57,8 @@ export function settingsMarkup(version) {
               <button type="button" class="menu_button als-retain-memory" hidden>不重构，保留现有总结</button>
             </section>
             <section class="als-last-section"><div class="als-section-heading"><h4>最近一次记忆</h4><button type="button" class="als-text-button als-view-current">查看正文 ${uiIcon('arrow')}</button></div><p class="als-summary-result" role="status"></p><p class="als-token-comparison als-help"></p><p class="als-last-operation als-muted">当前存档暂无总结。</p></section>
+            <button type="button" class="menu_button als-carry-current" disabled>带总结开新聊天</button>
+            <button type="button" class="menu_button als-choose-import" hidden>从旧档导入总结</button>
             <details class="als-incomplete-result als-disclosure" hidden><summary>未完成的总结草稿</summary><div class="als-disclosure-body"><p class="als-incomplete-reason als-help"></p><p class="als-draft-state als-help" role="status"></p><textarea class="text_pole als-incomplete-text" rows="8" readonly aria-label="未完成的总结正文"></textarea><div class="als-actions"><button type="button" class="menu_button als-incomplete-copy">复制未完成结果</button><button type="button" class="menu_button als-incomplete-download">下载未完成正文</button><button type="button" class="menu_button als-incomplete-retry" hidden>重试本地存储</button><button type="button" class="als-text-button als-incomplete-delete">删除这份草稿</button></div></div></details>
             <details class="als-recovery als-disclosure"><summary>${uiIcon('undo')}<span>恢复与撤销</span><span class="als-disclosure-note">最近一次操作</span></summary>
               <p class="als-help">一键退回本次整理前的记忆与原文，也可以分别处理。此前隐藏的消息保持原样。</p>
@@ -129,9 +131,9 @@ export function settingsMarkup(version) {
               <div class="als-reader-toolbar"><button type="button" class="als-text-button als-preview-close">${uiIcon('back')} 返回记录</button><div class="als-actions"><button type="button" class="als-text-button als-download-summary">下载原文</button><button type="button" class="als-icon-button als-copy-summary" aria-label="复制总结原文" title="复制总结原文">${uiIcon('copy')}</button></div></div>
               <h3 class="als-preview-title"></h3>
               <label class="als-field">查看内容<select class="text_pole als-history-select" aria-label="选择总结轮次"></select></label>
+              <div class="als-record-actions"><button type="button" class="menu_button als-import-record" hidden>导入到当前聊天</button><button type="button" class="als-text-button als-carry-record" hidden>带总结开新聊天</button><button type="button" class="als-text-button als-danger als-delete-round" disabled>删除选中轮次</button><button type="button" class="als-text-button als-danger als-delete-archive">删除整档总结</button></div>
               <div class="als-reader-views" role="group" aria-label="总结显示方式"><button type="button" class="als-reader-mode" data-view="reading" aria-pressed="true">阅读</button><button type="button" class="als-reader-mode" data-view="source" aria-pressed="false">原文</button></div>
               <small class="als-record-detail als-muted"></small><article class="als-reading" aria-label="总结阅读内容" tabindex="0"></article><textarea class="text_pole als-preview" rows="12" readonly aria-label="总结原文" hidden></textarea>
-              <details class="als-disclosure als-manage"><summary><span>管理这份记录</span></summary><p class="als-help">删除后按剩余历史重建注入内容，已隐藏的消息不会自动恢复。</p><div class="als-actions"><button type="button" class="menu_button als-danger als-delete-round" disabled>删除选中轮次</button><button type="button" class="menu_button als-danger als-delete-archive">删除整个存档总结</button></div></details>
             </div>
           </div>
           <footer class="als-footer"><span class="als-version">v${version} · NUE-喵喵电波</span><div class="als-update-state"><small class="als-update-status als-muted">尚未检查更新</small><button type="button" class="als-text-button als-update-check">检查更新</button></div></footer>

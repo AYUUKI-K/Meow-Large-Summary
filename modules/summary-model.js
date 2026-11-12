@@ -97,7 +97,7 @@ export function branchRecords(records, chat) {
     let inherited = [];
     let missingEarlier = false;
     for (const record of activeRecords(records)) {
-        const known = Number.isInteger(record.sourceEnd) && record.sourceEnd >= 0 && record.sourceDigest
+        const known = Number.isInteger(record.sourceEnd) && (record.sourceEnd >= 0 || (record.operation === 'carry' && record.sourceEnd === -1)) && record.sourceDigest
             && digest(record.sourceEnd) === record.sourceDigest;
         if (!known) { missingEarlier = true; continue; }
         if (record.mode === 'merged') {
@@ -173,6 +173,7 @@ export function automaticStatus(settings, archive, journal, { hasChat, busy, has
     if (!settings.enabled) return { label: '已停用', reason: '插件已关闭，不会自动总结。' };
     if (!hasChat) return { label: '等待聊天', reason: '请先打开单人聊天存档。' };
     if (busy) return { label: '处理中', reason: '当前操作结束后更新自动总结状态。' };
+    if (archive?.pendingContinuation) return { label: '等待导入确认', reason: '接续总结尚未写入当前聊天的世界书条目，可重试导入。' };
     if (archive?.sourceChanged) return { label: '记忆待确认', reason: '原文已改变，可更新记忆，或选择保留现有总结。' };
     if (archive?.branch?.needsRebuild) return { label: '等待更新', reason: '当前分支需要确认可复用的记忆，可在记录中查看。' };
     if (archive?.pendingSummarySave) return { label: '等待保存确认', reason: '请刷新世界书状态，确认上次总结是否已保存。' };
@@ -217,6 +218,7 @@ export function entryRevision(entry, marker) {
 
 export function sourceDescription(record) {
     if (!record) return '暂无总结记录';
+    if (record.operation === 'carry') return `接续自“${record.fromChat}”的已保存总结`;
     const source = Number.isInteger(record.sourceEnd) && record.sourceEnd >= 0
         ? `总结时到第 ${record.sourceEnd} 层（${record.sourceEnd + 1} 条消息）` : '旧记录未保存总结来源终点';
     const hidden = Number.isInteger(record.coveredTo) && record.coveredTo >= 0
