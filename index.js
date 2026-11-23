@@ -20,7 +20,7 @@ import { createSummaryJobStore, generateSummaryJob, summaryConnectionSignature }
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.6.0';
+const EXTENSION_VERSION = '1.6.1';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -98,7 +98,7 @@ const INSTRUCTION_POSITIONS = { tail: null, before: 2, after: 0, depth: 1 };
 function setStatus(message) {
     const status = ui?.querySelector('.als-status');
     const notice = ui?.querySelector('.als-notice');
-    if (notice) notice.hidden = /^(本次新隐藏 \d+ 条，保留原文 \d+ 条[，。]|自动总结已暂停，可手动总结|总结条目已同步|请选择角色卡的聊天存档)/.test(message);
+    if (notice) notice.hidden = /^(本次新隐藏 \d+ 条，保留原文 \d+ 条[，。]|自动总结已暂停，可手动总结|总结条目已同步|请选择角色卡的聊天存档|(?:当前存档|本轮回复后)上下文：)/.test(message);
     if (status) status.textContent = meowText(message);
     publishIntegrationState();
 }
@@ -1301,6 +1301,7 @@ async function ensureArchive(context = getContext()) {
         delete archive.sourceChanged;
         delete archive.sourceChangeAcknowledgement;
         delete archive.coverageBlocked;
+        delete archive.summaryHidden;
         archive.round = 0;
         archive.autoTriggerArmed = true;
         archive.summaryStillOverThreshold = false;
@@ -1388,6 +1389,25 @@ function hasWorldBookEdit(entry) {
     return Array.isArray(records) && archiveRecords(entry) !== records;
 }
 
+function knownSummaryHides(chat, archive, operation) {
+    const changes = new Map();
+    const epoch = archive.visibilityEpoch ?? '';
+    for (const source of [archive.summaryHidden, operation]) {
+        if (source?.manualEpoch !== epoch || source.messagesRestored || !Array.isArray(source.changes)) continue;
+        for (const change of source.changes) {
+            const message = chat[change.index];
+            if (message?.is_system && messageFingerprint(message) === change.fingerprint) changes.set(change.index, change);
+        }
+    }
+    return [...changes.values()];
+}
+
+function rememberSummaryHides(context, archive, operation) {
+    const changes = knownSummaryHides(context.chat, archive, operation);
+    if (changes.length) archive.summaryHidden = { manualEpoch: archive.visibilityEpoch ?? '', changes };
+    else delete archive.summaryHidden;
+}
+
 let worldBookEditRevision = 0;
 async function onWorldBookUpdated(name) {
     if (!settings.enabled || name !== settings.worldBookName || sendLockDepth) return;
@@ -1402,8 +1422,14 @@ async function onWorldBookUpdated(name) {
         const data = await readWorldBookData(context, name);
         if (revision !== worldBookEditRevision || !settings.enabled || name !== settings.worldBookName || sendLockDepth
             || getContext()?.chatMetadata?.[MODULE_NAME] !== archive || previousEntry !== currentSummaryEntry) return;
-        currentSummaryEntry = listOwnedEntries(data).find(entry => entryMetadata(entry)?.archiveId === archive.archiveId
+        const latest = listOwnedEntries(data).find(entry => entryMetadata(entry)?.archiveId === archive.archiveId
             && entryMetadata(entry)?.cardKey === archive.cardKey) ?? null;
+        if (entryMetadata(previousEntry)?.archiveId === archive.archiveId && previousEntry.content?.trim() && !latest?.content?.trim()) {
+            rememberSummaryHides(context, archive, entryMetadata(previousEntry).lastOperation);
+            reconcileDeletedMemory(archive, null);
+            context.saveMetadataDebounced?.();
+        }
+        currentSummaryEntry = latest;
         syncActionState();
         if (currentTab === 'directory') await renderDirectory();
     } catch (error) {
@@ -1855,6 +1881,18 @@ function reconcileArchiveMetadata(archive, entry) {
     return JSON.stringify(archive) !== before;
 }
 
+function reconcileDeletedMemory(archive, entry) {
+    reconcileArchiveMetadata(archive, entry);
+    archive.autoTriggerArmed = true;
+    archive.summaryStillOverThreshold = false;
+    if (!entry?.content?.trim()) {
+        delete archive.undoAtLength;
+        delete archive.coverageBlocked;
+        delete archive.sourceChangeAcknowledgement;
+        if (archive.branch) archive.branch.needsRebuild = false;
+    }
+}
+
 function canSummarize(context = getContext(), automatic = false) {
     const meta = entryMetadata(currentSummaryEntry);
     const pendingHide = !hasWorldBookEdit(currentSummaryEntry) && meta?.archiveId === context?.chatMetadata?.[MODULE_NAME]?.archiveId
@@ -1979,6 +2017,81 @@ async function updateSavedOperation(context, archiveInfo, operationId, mutate) {
     return entry;
 }
 
+async function applyRecordedVisibility(context, changes, hidden, check) {
+    const fingerprints = new Map(changes.map(item => [item.index, item.fingerprint]));
+    const indices = changes.filter(item => context.chat[item.index]
+        && messageFingerprint(context.chat[item.index]) === item.fingerprint
+        && Boolean(context.chat[item.index].is_system) !== hidden).map(item => item.index);
+    for (const [start, end] of consecutiveRanges(indices)) {
+        check();
+        const messages = context.chat.slice(start, end + 1);
+        if (messages.length !== end - start + 1 || messages.some((message, offset) => messageFingerprint(message) !== fingerprints.get(start + offset))) {
+            throw new Error('待恢复的楼层已变化，请重新确认。');
+        }
+        summaryHideInProgress = true;
+        try {
+            const result = await context.executeSlashCommandsWithOptions(`/${hidden ? 'hide' : 'unhide'} ${start}-${end}`);
+            if (result?.isError || context.chat.slice(start, end + 1).some(message => message && Boolean(message.is_system) !== hidden)) {
+                throw new Error('楼层状态未全部更新，可稍后重试。');
+            }
+        } finally { summaryHideInProgress = false; }
+    }
+    check();
+    return indices.length;
+}
+
+async function restoreOrphanedMessages() {
+    if (!settings.enabled || sendLockDepth || archiveEditInProgress) return false;
+    const context = getContext();
+    const archiveInfo = await ensureArchive(context);
+    if (!archiveInfo || !isSameArchive(getContext(), archiveInfo, context.characterId) || sendLockDepth) return false;
+    const { archive, chatId } = archiveInfo;
+    const bookName = settings.worldBookName;
+    const visibilityRevision = manualVisibilityRevision;
+    const check = () => {
+        const live = getContext();
+        if (!settings.enabled || settings.worldBookName !== bookName || manualVisibilityRevision !== visibilityRevision
+            || live?.chat !== context.chat || !isSameArchive(live, archiveInfo, context.characterId)) {
+            throw new Error('聊天、世界书或楼层状态已变化，请重新确认。');
+        }
+    };
+    archiveEditInProgress = true;
+    lockSending();
+    try {
+        if (!await waitForCurrentGeneration(context, chatId)) throw new Error('当前生成尚未结束，请稍后再试。');
+        const data = await prepareWorldBook(context, bookName, { create: false, readOnly: true });
+        check();
+        const entry = listOwnedEntries(data).find(item => entryMetadata(item)?.archiveId === archive.archiveId);
+        if (entry?.content?.trim()) throw new Error('当前聊天已有已保存的总结，请在「恢复与撤销」中恢复本轮原文。');
+        const known = knownSummaryHides(context.chat, archive, entryMetadata(entry)?.lastOperation);
+        const changes = known.length ? known : context.chat.flatMap((message, index) => message?.is_system
+            ? [{ index, fingerprint: messageFingerprint(message) }] : []);
+        if (!changes.length) { setStatus('当前聊天没有待恢复的隐藏原文。'); return false; }
+        const message = known.length ? `恢复 ${changes.length} 条由大总结隐藏的原文？`
+            : `将恢复当前聊天的 ${changes.length} 条隐藏消息，可能包括你之前手动隐藏的楼层。确认全部恢复？`;
+        if (!window.confirm(message)) return false;
+        const restored = await applyRecordedVisibility(context, changes, false, check);
+        delete archive.summaryHidden;
+        reconcileDeletedMemory(archive, null);
+        currentSummaryEntry = entry ?? null;
+        await context.saveMetadata?.();
+        check();
+        const done = `已恢复 ${restored} 条原文。现在可以点「立即总结」。`;
+        setStatus(done);
+        notify('success', done);
+        scheduleVisibilityRefresh(context);
+        return true;
+    } catch (error) {
+        const message = `恢复隐藏原文失败：${error.message}`;
+        setStatus(message);
+        notify('warning', message);
+        return false;
+    } finally {
+        archiveEditInProgress = false;
+        unlockSending();
+    }
+}
+
 async function recoverLatestSummary(action) {
     if (!['retry', 'restore', 'undo', 'undo-restore'].includes(action) || !settings.enabled || sendLockDepth || archiveEditInProgress) return;
     const combined = action === 'undo-restore';
@@ -2054,20 +2167,9 @@ async function recoverLatestSummary(action) {
             check();
             const hidden = action === 'retry';
             if (hidden) { await verifySummaryInjection(context, entry); check(); updateTaskStage('restoring'); }
-            const indices = journal.changes.filter(item => messageFingerprint(context.chat[item.index]) === item.fingerprint
-                && Boolean(context.chat[item.index]?.is_system) !== hidden).map(item => item.index);
-            for (const [start, end] of consecutiveRanges(indices)) {
-                check();
-                summaryHideInProgress = true;
-                try {
-                    const result = await context.executeSlashCommandsWithOptions(`/${hidden ? 'hide' : 'unhide'} ${start}-${end}`);
-                    if (result?.isError || context.chat.slice(start, end + 1).some(message => message && Boolean(message.is_system) !== hidden)) {
-                        throw new Error('楼层状态未全部更新，可稍后重试。');
-                    }
-                } finally { summaryHideInProgress = false; }
-            }
-            check();
+            await applyRecordedVisibility(context, journal.changes, hidden, check);
             if (hidden) {
+                rememberSummaryHides(context, archiveInfo.archive, journal);
                 reconcileArchiveMetadata(archiveInfo.archive, entry);
                 archiveInfo.archive.autoTriggerArmed = false;
                 await context.saveMetadata?.();
@@ -2270,12 +2372,20 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
     const context = getContext();
     const current = getCharacterAndChat(context);
     if (!context || !current) {
-        if (manual) notify('warning', '请先打开一个角色卡的聊天存档。');
+        if (manual) {
+            const message = '请先打开一个角色卡的单人聊天存档。';
+            setStatus(message);
+            notify('warning', message);
+        }
         return;
     }
     if (!canSummarize(context, !manual)) {
-        if (manual) notify('warning', context.chatMetadata?.[MODULE_NAME]?.pendingContinuation
-            ? '接续记忆尚未写入，请刷新世界书状态。' : '请填写总结提示词。');
+        if (manual) {
+            const message = context.chatMetadata?.[MODULE_NAME]?.pendingContinuation
+                ? '接续记忆尚未写入，请刷新世界书状态。' : '请填写总结提示词。';
+            setStatus(message);
+            notify('warning', message);
+        }
         return;
     }
 
@@ -2380,12 +2490,15 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
                 ? { coveredFrom: 0, coveredTo: summaryScope(sourceChat, keepRecent).coveredTo, keepRecent }
                 : summaryScope(sourceChat, keepRecent, archiveInfo.archive.lastSummarizedThrough ?? -1).range;
         if (!range) {
-            setStatus('没有可总结的旧楼层，可以继续对话。');
+            const message = !beforeEntry?.content?.trim() && sourceChat.some(item => item?.is_system)
+                ? '当前没有已保存的总结，且旧楼层仍隐藏。请在首页恢复隐藏的原文后再总结。'
+                : '没有可总结的旧楼层，可以继续对话。';
+            setStatus(message);
             if (!manual) {
                 archiveInfo.archive.autoTriggerArmed = true;
                 await context.saveMetadata?.();
             }
-            if (manual) notify('info', '没有可总结的旧楼层。');
+            if (manual) notify('info', message);
             return;
         }
         const sourceSnapshot = captureMessageRange(sourceChat, sourceEnd);
@@ -2583,6 +2696,10 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
                 result = await liveContext.executeSlashCommandsWithOptions(`/hide ${hideStart}-${hideEnd}`);
             } finally {
                 summaryHideInProgress = false;
+                if (isSameArchive(getContext(), archiveInfo, context.characterId) && journal.manualEpoch === (currentArchive.visibilityEpoch ?? '')) {
+                    rememberSummaryHides(liveContext, currentArchive, journal);
+                    if (result?.isError || !result) liveContext.saveMetadataDebounced?.();
+                }
             }
             assertSummaryActive();
             if (result?.isError || liveContext.chat.slice(hideStart, hideEnd + 1).some(message => message && !message.is_system)) {
@@ -2762,7 +2879,10 @@ async function checkAfterReply(pending) {
             return;
         }
         if ((archiveInfo.archive.autoTriggerArmed === false && !pending.onOpen)
-            || !eligibleUncoveredRange(context, archiveInfo, false)) return;
+            || !eligibleUncoveredRange(context, archiveInfo, false)) {
+            syncActionState();
+            return;
+        }
         archiveInfo.archive.autoTriggerArmed = false;
         await context.saveMetadata?.();
         if (!stillEnabled()) return;
@@ -3052,25 +3172,53 @@ async function deleteSummarySelection({ roundOnly = false, selection = selectedS
     lockSending();
     try {
         const context = getContext();
-        const data = await prepareWorldBook(context, selection.bookName, { create: false });
+        let data = await prepareWorldBook(context, selection.bookName, { create: false });
         if (!settings.enabled) return;
-        const entry = data?.entries?.[selection.uid];
+        let entry = data?.entries?.[selection.uid];
         if (!entry || entryMetadata(entry)?.archiveId !== selection.archiveId) return;
-        const meta = entryMetadata(entry);
+        let meta = entryMetadata(entry);
+        const revision = entryRevision(entry, ENTRY_MARKER);
         const records = archiveRecords(entry);
         const index = selectedRound === 'all' ? NaN : Number(selectedRound);
         if (roundOnly && (!Number.isInteger(index) || !shownRecord || JSON.stringify(records[index]) !== JSON.stringify(shownRecord))) {
             throw new Error('选中的轮次已变动，请刷新后再删除。');
         }
-        const message = roundOnly
-            ? `删除“${meta.characterName} / ${meta.chatName}”的第 ${records[index].round} 次总结？将按剩余历史重建注入内容，已隐藏楼层不会自动恢复。`
-            : `删除“${meta.characterName} / ${meta.chatName}”的全部总结？已隐藏楼层不会自动恢复。`;
-        if (!window.confirm(message)) return;
-        let remaining = [];
-        if (roundOnly) remaining = records.filter((_record, position) => position !== index);
+        const remaining = roundOnly ? records.filter((_record, position) => position !== index) : [];
         const lastActive = activeRecords(remaining).at(-1);
+        const remainingContent = combineRecords(remaining);
+        const current = getCharacterAndChat(context);
+        const archive = context.chatMetadata?.[MODULE_NAME];
+        const currentArchive = current && archive?.archiveId === selection.archiveId && current.cardKey === meta.cardKey ? { ...current, archive } : null;
+        const stillCurrent = () => {
+            const live = getContext();
+            return currentArchive && live?.chat === context.chat && isSameArchive(live, currentArchive, context.characterId);
+        };
+        const visibilityRevision = manualVisibilityRevision;
+        const checkRestore = () => {
+            if (!stillCurrent() || !settings.enabled || settings.worldBookName !== selection.bookName || manualVisibilityRevision !== visibilityRevision) {
+                throw new Error('聊天、世界书或楼层状态已变化，请重新确认。');
+            }
+        };
+        const restore = currentArchive && !remainingContent.trim() ? knownSummaryHides(context.chat, archive, meta.lastOperation) : [];
+        const message = roundOnly ? `删除“${meta.characterName} / ${meta.chatName}”的第 ${records[index].round} 次总结？`
+            : `删除“${meta.characterName} / ${meta.chatName}”的全部总结？`;
+        if (!window.confirm(`${message}${restore.length ? `删除确认后会恢复 ${restore.length} 条可核对的大总结隐藏原文。` : '隐藏的楼层可在对应聊天中处理。'}`)) return;
+        if (restore.length) {
+            if (!await waitForCurrentGeneration(context, currentArchive.chatId)) throw new Error('当前生成尚未结束，请稍后再试。');
+            checkRestore();
+            rememberSummaryHides(context, archive, meta.lastOperation);
+            await context.saveMetadata?.();
+            checkRestore();
+        }
+        data = await prepareWorldBook(context, selection.bookName, { create: false, readOnly: true });
+        entry = data?.entries?.[selection.uid];
+        if (!settings.enabled || selection.bookName !== settings.worldBookName || entryRevision(entry, ENTRY_MARKER) !== revision) {
+            throw new Error('总结条目或设置已变化，请刷新后重新删除。');
+        }
+        if (restore.length) checkRestore();
+        meta = entryMetadata(entry);
         if (remaining.length) {
-            entry.content = combineRecords(remaining);
+            entry.content = remainingContent;
             Object.assign(meta, {
                 records: remaining, round: lastActive?.round ?? 0, mode: lastActive?.mode ?? 'incremental',
                 coveredTo: lastActive?.coveredTo ?? -1, sourceEnd: lastActive?.sourceEnd ?? null,
@@ -3086,24 +3234,40 @@ async function deleteSummarySelection({ roundOnly = false, selection = selectedS
         await context.saveWorldInfo(selection.bookName, data, true);
         const persisted = await prepareWorldBook(context, selection.bookName, { create: false });
         const saved = persisted?.entries?.[selection.uid];
-        if (remaining.length ? saved?.content !== entry.content || entryMetadata(saved)?.records?.length !== remaining.length : Boolean(saved)) {
+        if (remaining.length ? saved?.content !== entry.content || entryMetadata(saved)?.records?.length !== remaining.length
+            : listOwnedEntries(persisted).some(item => entryMetadata(item)?.archiveId === selection.archiveId)) {
             throw new Error('总结删除后未能从世界书读回确认。');
         }
         const live = getContext();
-        if (live?.chatMetadata?.[MODULE_NAME]?.archiveId === selection.archiveId) {
-            Object.assign(live.chatMetadata[MODULE_NAME], {
-                lastSummarizedThrough: lastActive?.coveredTo ?? -1, sourceEnd: lastActive?.sourceEnd ?? null,
-                round: lastActive?.round ?? 0, autoTriggerArmed: true, summaryStillOverThreshold: false,
-            });
+        let restoreError = '';
+        let restored = 0;
+        if (stillCurrent()) {
+            reconcileDeletedMemory(archive, remainingContent.trim() ? saved : null);
+            if (restore.length) {
+                try {
+                    restored = await applyRecordedVisibility(context, restore, false, checkRestore);
+                    delete archive.summaryHidden;
+                } catch (error) { restoreError = error.message; }
+            }
+        }
+        if (stillCurrent()) {
             await live.saveMetadata?.();
         }
-        live.reloadWorldInfoEditor?.(selection.bookName);
+        live?.reloadWorldInfoEditor?.(selection.bookName);
         if (selection.bookName !== settings.worldBookName) return;
         closeSummaryPreview({ focus: false });
         await syncCurrentArchive();
         await renderDirectory();
         if (remaining.length) showSummary(persisted.entries[selection.uid]);
-        notify('success', roundOnly ? '本轮总结已删除。' : '聊天档的总结条目已删除。');
+        const deleted = roundOnly ? '本轮总结已删除。' : '聊天档的总结条目已删除。';
+        const outcome = restoreError ? `${deleted}原文恢复未完成：${restoreError} 可在当前聊天重试。`
+            : restored ? `${deleted}已恢复 ${restored} 条隐藏原文。`
+            : deleted;
+        setStatus(outcome);
+        notify(restoreError ? 'warning' : 'success', outcome);
+    } catch (error) {
+        setStatus(`删除总结失败：${error.message}`);
+        throw error;
     } finally {
         archiveEditInProgress = false;
         unlockSending();
@@ -3521,6 +3685,9 @@ function syncActionState() {
     const current = getCharacterAndChat(context);
     const busy = !settings.enabled || Boolean(sendLockDepth) || !current;
     const hasMemory = Boolean(entry?.content?.trim());
+    const canRestoreHidden = Boolean(settings.enabled && current && !hasMemory && scope.hiddenCount && !job
+        && !archive?.pendingContinuation && !archive?.pendingSummarySave);
+    const needsOriginals = canRestoreHidden && !scope.range;
     const canImport = canImportInto(context);
     const compressReason = !settings.enabled ? '请先启用插件。'
         : !current ? '请先打开单人聊天。'
@@ -3534,6 +3701,7 @@ function syncActionState() {
     const controls = {
         '.als-resume': busy || !job || job.invalid || Boolean(archive?.pendingSummarySave),
         '.als-run': busy || needsRebuild || !scope.range,
+        '.als-restore-orphaned': busy || !canRestoreHidden,
         '.als-compact': busy || Boolean(job) || !hasMemory || needsRebuild,
         '.als-compress': Boolean(sendLockDepth),
         '.als-compress-confirm': Boolean(compressReason),
@@ -3582,7 +3750,7 @@ function syncActionState() {
         hasWork: Boolean(scope.range), chatLength: context?.chat?.length ?? 0 });
     const stopped = Boolean(job && !busy);
     const autoRunning = Boolean(activeRun?.automatic && !activeRun.cancelled);
-    const autoReady = Boolean(autoState.active && !stopped && !activeRun);
+    const autoReady = Boolean(autoState.active && !stopped && !activeRun && !needsOriginals);
     const statusHeading = ui.querySelector('.als-state-heading');
     if (statusHeading) statusHeading.dataset.autoActive = String(autoRunning || autoReady);
     setUiText('.als-state-badge', activeRun?.cancelled ? '正在停止'
@@ -3591,6 +3759,7 @@ function syncActionState() {
         : activeRun?.operation === 'compress' ? '正在压缩已有总结'
         : activeRun ? '正在整理'
         : stopped ? (job.operation === 'compress' ? '有一轮压缩未完成' : '有一轮总结未完成')
+        : needsOriginals && !busy ? '旧楼层仍隐藏' : !settings.prompt?.trim() && !busy ? '缺少总结提示词'
         : autoReady ? '自动总结已开启' : autoState.label === '手动模式' ? '仅手动总结' : autoState.label);
     setUiText('.als-chat-title', current?.chatName ?? '请选择一个聊天存档');
     setUiText('.als-chat-detail', current ? `${current.characterName} · ${total} 条消息 · ${entry ? archiveRecords(entry).length : 0} 次总结记录` : '打开单人聊天后即可整理与保存记忆。');
@@ -3638,11 +3807,14 @@ function syncActionState() {
         : archive?.coverageBlocked ? '上次未能核实总结用到的聊天原文。检查聊天历史、上下文长度和会改写请求的扩展后，可手动重试。' + (entry ? '点「查看完整记忆」可核对手改正文。' : '')
         : archive?.branch?.needsRebuild ? '部分旧总结无法确认属于当前分支。可从有效旧总结更新记忆，或到世界书中手动处理。'
         : journal?.phase === 'saved' ? '总结已保存，隐藏未完成。请在“恢复与撤销”中只重试隐藏，无需再次总结。'
-        : scope.range || entry?.content?.trim() ? ''
+        : !settings.prompt?.trim() ? '请在设置的「自定义提示词」填写总结指令。'
+        : canRestoreHidden ? `当前没有已保存的总结，仍有 ${scope.hiddenCount} 条原文处于隐藏状态。${needsOriginals ? '请先恢复原文再总结。' : '可先恢复，再让总结读取这些楼层。'}`
+        : scope.range ? ''
         : total <= scope.recentCount ? '当前消息均在保留范围内，没有可处理的旧消息。'
         : '没有可处理的旧消息：旧消息已总结、已隐藏或正文为空。';
     setUiText('.als-action-context', actionContext);
-    setUiText('.als-home-status-detail', actionContext || activeRun || stopped || (autoReady && scope.range) ? '' : autoState.reason);
+    const showAutoReason = !activeRun && !stopped && (!actionContext || (canRestoreHidden && scope.range && !needsRebuild));
+    setUiText('.als-home-status-detail', showAutoReason ? autoState.reason : '');
     setUiHidden('.als-world-book-edit', !edited);
     setUiText('.als-summary-result', summaryResultText(journal));
     setUiText('.als-token-comparison', tokenComparisonText(archive?.lastSummaryTokens, journal));
@@ -3652,7 +3824,9 @@ function syncActionState() {
         : job ? ['.als-resume', job.operation === 'compress' ? '继续压缩' : job.result ? '重试保存（不重新生成）' : '继续总结']
         : needsRebuild ? ['.als-rebuild', '更新记忆（从有效总结接续）']
         : journal?.phase === 'saved' && !journal.messagesRestored && journal.hideEnd >= 0 ? ['.als-retry-hide', '只重试隐藏（不重新生成）']
+        : needsOriginals ? ['.als-restore-orphaned', '恢复隐藏的原文']
         : !scope.range && entry?.content?.trim() ? ['.als-view-current', '查看完整记忆'] : null;
+    setUiHidden('.als-restore-orphaned', !canRestoreHidden || suggested?.[0] === '.als-restore-orphaned');
     const reading = suggested?.[0] === '.als-view-current' && !activeRun && !archive?.pendingSummarySave;
     const lastRecord = entry ? activeRecords(archiveRecords(entry)).at(-1) : null;
     setUiHidden('.als-scope', !scope.range || Boolean(suggested && !archive?.coverageBlocked));
@@ -4102,8 +4276,13 @@ async function renderSettings() {
     ui.querySelector('.als-next-action').addEventListener('click', event => {
         if (sendLockDepth) return;
         const target = event.currentTarget.dataset.target;
-        if (['.als-book-check', '.als-rebuild', '.als-retry-hide', '.als-view-current', '.als-undo-restore', '.als-resume'].includes(target)) ui.querySelector(target)?.click();
+        if (['.als-book-check', '.als-rebuild', '.als-retry-hide', '.als-view-current', '.als-undo-restore', '.als-resume', '.als-restore-orphaned'].includes(target)) ui.querySelector(target)?.click();
     });
+    ui.querySelector('.als-restore-orphaned').addEventListener('click', () => void restoreOrphanedMessages().catch(error => {
+        const message = `恢复隐藏原文失败：${error.message}`;
+        setStatus(message);
+        notify('warning', message);
+    }));
     ui.querySelector('.als-prompt-discard').addEventListener('click', () => {
         if (sendLockDepth) return;
         promptDrafts[promptDraftKey()] = savedEditorPrompt();

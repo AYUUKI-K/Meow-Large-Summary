@@ -240,7 +240,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Gemini 抗外审 / 抗截断（工具包装），默认关，用户自己打开
     geminiShieldInput: null,
     geminiShieldOutput: false,
-    threshold: 60000,
+    threshold: 80000,
     keepRecent: 8,
     worldBookName: '喵喵大总结世界书',
     depth: 9999,

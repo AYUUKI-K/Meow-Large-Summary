@@ -56,6 +56,7 @@ export function settingsMarkup(version) {
               <div class="als-home-task"><div class="als-task-row"><div class="als-task-track"><span aria-hidden="true"></span><small class="als-task-state" role="status"></small></div><button type="button" class="menu_button als-cancel" hidden>停止生成</button></div></div>
               <button type="button" class="menu_button als-primary als-next-action" hidden></button>
               <button type="button" class="menu_button als-resume" hidden>继续总结</button>
+              <button type="button" class="menu_button als-restore-orphaned" hidden>恢复隐藏的原文</button>
               <button type="button" class="als-text-button als-discard-progress" hidden>放弃本次进度</button>
               <button type="button" class="menu_button als-primary als-run"><span>立即总结</span>${uiIcon('arrow')}</button>
               <p class="als-progress-note als-help" role="status" hidden></p>

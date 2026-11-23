@@ -611,7 +611,7 @@ test('input budget warning follows connection capacity without modifying thresho
 // 夹具默认模拟「已经在用的老用户」；测新装默认值时传 { __fresh: true }。
 function legacyDefaults(savedSettings) {
     if (savedSettings?.__fresh) { const { __fresh, ...rest } = savedSettings; return rest; }
-    return { promptStyle: 'traditional', inputCap: 'safe', compressTarget: 5000, keepRecent: 20, ...savedSettings };
+    return { promptStyle: 'traditional', inputCap: 'safe', compressTarget: 5000, keepRecent: 20, threshold: 60000, ...savedSettings };
 }
 
 async function fixture(savedSettings = {}, storageData = new Map(), extensionFolder = 'Meow-Large-Summary') {
@@ -3110,6 +3110,41 @@ test('round deletion uses the record the user selected and refuses a stale list 
     assert.equal(f.sandbox.__fixtures.book().entries[2], undefined);
 });
 
+test('deleting the current summary restores originals from multiple runs and preserves a manually hidden message', async () => {
+    const f = await fixture({ autoEnabled: false, keepRecent: 8 });
+    f.prepareSummary();
+    f.context.chat[2].is_system = true;
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+    f.context.chat.push(...Array.from({ length: 10 }, (_, i) => ({ mes: `新楼层 ${i}`, name: '角色 A', is_system: false })));
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+    const entry = bookEntry(f);
+    f.sandbox.__fixtures.selection = { uid: entry.uid, archiveId: 'archive-a', bookName: f.api.state().settings.worldBookName };
+    f.api.evaluate('syncCurrentArchive = async () => {};');
+    await f.api.evaluate('deleteSummarySelection({ selection: __fixtures.selection })');
+    assert.deepEqual(Object.keys(f.sandbox.__fixtures.book().entries), []);
+    assert.deepEqual(f.context.chat.flatMap((message, index) => message.is_system ? [index] : []), [2]);
+    assert.equal(f.context.chatMetadata.auto_large_summary.lastSummarizedThrough, -1);
+    assert.match(f.controls.get('.als-status').textContent, /已恢复 31 条隐藏原文/);
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+});
+
+test('older hidden originals with no summary can be recovered after explicit confirmation', async () => {
+    const f = await fixture({ autoEnabled: false });
+    f.prepareSummary();
+    f.context.chat[3].is_system = true;
+    let requested;
+    f.sandbox.window.confirm = text => { requested = text; return false; };
+    assert.equal(await f.api.evaluate('restoreOrphanedMessages()'), false);
+    assert.match(requested, /可能包括你之前手动隐藏的楼层/);
+    assert.equal(f.context.chat[3].is_system, true);
+    assert.deepEqual(f.executed, []);
+    f.sandbox.window.confirm = () => true;
+    assert.equal(await f.api.evaluate('restoreOrphanedMessages()'), true);
+    assert.equal(f.context.chat[3].is_system, false);
+    assert.deepEqual(f.executed, ['/unhide 3-3']);
+    assert.match(f.controls.get('.als-status').textContent, /已恢复 1 条原文/);
+});
+
 test('branch inheritance uses actual source endpoint, not the earlier hide boundary', async () => {
     const f = await fixture();
     f.prepareSummary();
@@ -3968,11 +4003,12 @@ test('input cap: one-shot by default, 60000 / 24000 segment tiers, custom, never
     assert.equal(budget('custom', 50000, 100000), 35000);
 });
 
-test('fresh installs default to MoM style, eight retained messages, one-shot summaries and a 10000-token compression target', async () => {
+test('fresh installs default to MoM style, eight retained messages, an 80000-token trigger, one-shot summaries and a 10000-token compression target', async () => {
     const f = await fixture({ __fresh: true });
     const s = f.api.state().settings;
     assert.equal(s.promptStyle, 'chronicle');
     assert.equal(s.keepRecent, 8);
+    assert.equal(s.threshold, 80000);
     assert.equal(s.inputCap, 'context');
     assert.equal(s.compressTarget, 10000);
     assert.equal(s.prompt, defaultPrompt('chronicle', 'incremental'));
