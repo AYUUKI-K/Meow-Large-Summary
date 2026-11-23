@@ -2152,9 +2152,12 @@ function summaryInputBudget(hostBudget) {
 
 async function countSummaryTokens(context, text) {
     if (typeof context.getTokenCountAsync === 'function') {
-        try { return await context.getTokenCountAsync(String(text), 0); } catch { /* 用字数估 */ }
+        try {
+            const tokens = await context.getTokenCountAsync(text, 0);
+            if (Number.isFinite(tokens) && tokens >= 0) return { tokens, estimated: false };
+        } catch { /* 计数器不可用时用字数估 */ }
     }
-    return String(text).length;
+    return { tokens: text.length, estimated: true };
 }
 
 function compressTask(target, extra = '') {
@@ -2199,9 +2202,9 @@ async function generateResumableSummary(context, { archiveId, sourceChat, source
     const mergeTask = mode === 'incremental'
         ? '将以下本轮新增笔记按模板的整轮字数整理为一份新增记忆，合并跨段重复的事实，只保留最后的接续状态'
         : '将按时间排列的分段总结整理为完整记忆，不遗漏仍有效的事实';
-    const promptFor = (source, merging = false) => sourceTaskPrompt(merging
-        ? mergeTask
-        : '整理本段全部资料，后续还会处理其他段；不要推测本段之外的事件', template, source);
+    const promptFor = (source, merging = false) => sourceTaskPrompt(operation === 'compress'
+        ? compressTask(compressTarget, merging ? '整合各段压缩结果' : '')
+        : merging ? mergeTask : '整理本段全部资料，后续还会处理其他段；不要推测本段之外的事件', template, source);
     let summary = await generateSummaryJob({ job, sources, background: MERGE_ONLY.has(operation) ? '' : background,
         merge: mode === 'merged', combineNewSegments, promptFor, count, budget, check, save: saveSummaryJob,
         progress: part => { activeRun.part = part; activeRun.stream = null; syncTaskState(); },
@@ -2212,33 +2215,27 @@ async function generateResumableSummary(context, { archiveId, sourceChat, source
             : () => requestMainApiSummary(context, prompt, { sourceOnly: operation !== 'summary' }),
     });
     if (operation === 'compress') {
-        // 压完数一遍真实 token，超了拿这一版再压，最多 COMPRESS_ROUNDS 轮。每轮结果存进进度，继续总结时不重跑。
-        for (let round = 2; round <= COMPRESS_ROUNDS; round++) {
-            const tokens = await countSummaryTokens(context, summary);
-            check();
-            job.compressTokens = tokens;
-            if (tokens <= compressTarget) break;
+        let measurement = await countSummaryTokens(context, summary);
+        check();
+        for (let round = (job.compressRound ?? 1) + 1; round <= COMPRESS_ROUNDS && measurement.tokens > compressTarget; round++) {
             const roundPrompt = sourceTaskPrompt(compressTask(compressTarget,
-                `上一次压缩后仍有约 ${tokens} token。请再压缩到 ${compressTarget} token 以内，优先合并远期事件`), template, summary);
+                `上一次压缩后仍有约 ${measurement.tokens} token。请再压缩到 ${compressTarget} token 以内，优先合并远期事件`), template, summary);
             if (Number.isFinite(budget) && await count(roundPrompt) > budget) break;
-            const key = textDigest(`compress\n${roundPrompt}`);
-            const saved = job.steps.find(step => step.key === key);
-            let text = saved?.text;
-            if (!text) {
-                activeRun.part = `压缩第 ${round}/${COMPRESS_ROUNDS} 轮`;
-                activeRun.stream = null;
-                syncTaskState();
-                text = String(await requestMainApiSummary(context, roundPrompt, { sourceOnly: true })).trim();
-                check();
-                if (!text) break;
-                job.steps.push({ key, text });
-            }
+            check();
+            activeRun.part = `压缩第 ${round}/${COMPRESS_ROUNDS} 轮`;
+            activeRun.stream = null;
+            syncTaskState();
+            const text = String(await requestMainApiSummary(context, roundPrompt, { sourceOnly: true })).trim();
+            check();
+            if (!text) break;
             summary = text;
             job.result = summary;
+            job.compressRound = round;
             saveSummaryJob(job);
+            measurement = await countSummaryTokens(context, summary);
+            check();
         }
-        job.compressTokens = await countSummaryTokens(context, summary);
-        saveSummaryJob(job);
+        activeRun.compression = measurement;
     }
     rememberIncompleteDraft(archiveId, summary, '正文已生成，尚未确认写入世界书；继续总结会重试保存。');
     return summary;
@@ -2582,9 +2579,16 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         currentArchive.autoTriggerArmed = false;
         await liveContext.saveMetadata?.();
         updateTaskStage('complete');
-        const completion = summaryResultText(entryMetadata(currentSummaryEntry)?.lastOperation);
+        let completion = summaryResultText(entryMetadata(currentSummaryEntry)?.lastOperation);
+        const compression = activeRun.compression;
+        const overTarget = compression?.tokens > target;
+        if (overTarget) {
+            completion += `。已保留最后一版，${compression.estimated ? '估算约 ' : '共 '}${compression.tokens.toLocaleString()} token，超过 ${target.toLocaleString()} token 的目标。`;
+        } else if (compression?.estimated) {
+            completion += '。酒馆计数器不可用，本次按字数估算长度。';
+        }
         setStatus(completion);
-        notify('success', completion, '喵喵大总结');
+        notify(overTarget ? 'warning' : 'success', completion, '喵喵大总结');
         if (manual) scheduleVisibilityRefresh(liveContext, { afterSummary: true });
         void renderDirectory();
         return true;

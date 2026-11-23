@@ -4001,7 +4001,46 @@ test('compression re-compresses until under target and stops after three rounds'
         assert.equal(await f.api.runLargeSummary({ operation: 'compress' }), true);
         assert.equal(f.sandbox.__fixtures.compressCalls, expectedCalls);
         assert.equal(bookEntry(f).content, expectedContent);
+        const status = f.controls.get('.als-status').textContent;
+        if (expectedCalls === 3) assert.match(status, /700 token，超过 500 token 的目标/);
+        else assert.doesNotMatch(status, /超过/);
     }
+});
+
+test('compression resumes the final retry after a failure without exceeding three completed rounds', async () => {
+    const f = await fixture({ autoEnabled: false, compressTarget: 500 });
+    f.prepareSummary();
+    await f.api.runLargeSummary({ manual: true });
+    f.context.getTokenCountAsync = async text => text.length;
+    f.api.evaluate(`requestMainApiSummary = async () => {
+        const call = __fixtures.calls = (__fixtures.calls ?? 0) + 1;
+        if (call === 3) throw new Error('network failure');
+        return 'x'.repeat(1000 - 100 * call);
+    };`);
+    await f.api.runLargeSummary({ operation: 'compress' });
+    assert.equal(f.api.evaluate('summaryJob("archive-a").compressRound'), 2);
+    assert.equal(await f.api.evaluate('resumeSummaryJob()'), true);
+    assert.equal(f.sandbox.__fixtures.calls, 4);
+    assert.equal(bookEntry(f).content.length, 600);
+    assert.match(f.controls.get('.als-status').textContent, /600 token，超过 500 token 的目标/);
+});
+
+test('oversized saved memory is compressed in bounded segments with the target in each request', async () => {
+    const f = await fixture({ autoEnabled: false, inputCapTokens: 4000, compressTarget: 500 });
+    f.prepareSummary();
+    f.api.evaluate(`requestMainApiSummary = async () => '旧总结'.repeat(3500);`);
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+    f.context.getTokenCountAsync = async text => text.length;
+    const executed = f.executed.length;
+    f.api.evaluate(`settings.inputCap = 'custom'; requestMainApiSummary = async (_, prompt, options) => {
+        if (!options.sourceOnly || !prompt.includes('目标：全文不超过 500 token') || prompt.length > 4000) throw new Error('invalid compression request');
+        __fixtures.calls = (__fixtures.calls ?? 0) + 1;
+        return prompt.includes('整合各段压缩结果') ? '合并后的压缩结果' : '该段的压缩结果';
+    };`);
+    assert.equal(await f.api.runLargeSummary({ operation: 'compress' }), true);
+    assert.ok(f.sandbox.__fixtures.calls > 2);
+    assert.equal(bookEntry(f).content, '合并后的压缩结果');
+    assert.equal(f.executed.length, executed);
 });
 
 test('compression of an empty archive does not call the model', async () => {
