@@ -341,6 +341,7 @@ for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-eve
 }
 
 for (const [label, shield, expectRoles] of [
+    ['Gemini 4 default', {}, ['user', 'assistant', 'tool']],
     ['off', { geminiShieldInput: false, geminiShieldOutput: false }, ['user']],
     ['input', { geminiShieldInput: true, geminiShieldOutput: false }, ['user', 'assistant', 'tool']],
     ['input+output', { geminiShieldInput: true, geminiShieldOutput: true }, ['system', 'user', 'assistant', 'tool']],
@@ -376,7 +377,7 @@ for (const [label, shield, expectRoles] of [
         assert.ok(sent, 'one model call');
         const roles = sent.messages.map(message => message.role);
         assert.deepEqual(roles.filter(role => role !== 'system'), expectRoles.filter(role => role !== 'system'));
-        if (shield.geminiShieldInput) {
+        if (expectRoles.includes('tool')) {
             assert.equal(sent.messages.at(-1).role, 'tool');
             assert.ok(!sent.messages.slice(0, -1).some(message => String(message.content ?? '').includes(f.context.chat.find(m => !m.is_system).mes)), 'source only inside the tool result');
             assert.equal(sent.custom_prompt_post_processing, 'semi_tools');

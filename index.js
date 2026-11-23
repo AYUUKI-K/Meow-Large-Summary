@@ -13,7 +13,7 @@ import { tauriPromptPreview } from './modules/tauri-prompt-preview.js';
 import { completionFailure, promptContainsText, summaryOutputFailure } from './modules/generation-validation.js';
 import { buildSummaryMessages, buildSummaryTextPrompt, SUMMARY_TASK_INSTRUCTION } from './modules/summary-prompt.js';
 import { readSummaryStream, summaryResponseError, supportsSummaryStream } from './modules/summary-stream.js';
-import { applyGeminiShield, collectGoogleStream, readWholeBody, unwrapShieldOutput } from './modules/gemini-shield.js';
+import { applyGeminiShield, collectGoogleStream, geminiShieldInputEnabled, isGeminiTarget, readWholeBody, unwrapShieldOutput } from './modules/gemini-shield.js';
 import { downloadText } from './modules/text-export.js';
 import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 import { createSummaryJobStore, generateSummaryJob, summaryConnectionSignature } from './modules/summary-job.js';
@@ -29,6 +29,7 @@ let ui;
 let pendingGeneration = null;
 let runInProgress = false;
 let activeRun = null;
+let getChatModel = null;
 let generationToken = 0;
 let summaryTimer = null;
 let promptProbe = null;
@@ -1024,7 +1025,9 @@ async function requestMainApiSummary(context, prompt, { sourceOnly = false } = {
                 payload.stream = Boolean(streaming);
                 payload.n = 1;
                 // Gemini 抗外审 / 抗截断：只改发出去的这一份，前面的原文核对不受影响。
-                const shield = applyGeminiShield(payload, { input: settings.geminiShieldInput, output: settings.geminiShieldOutput });
+                const shield = applyGeminiShield(payload, {
+                    input: geminiShieldInputEnabled(settings.geminiShieldInput, payload.model), output: settings.geminiShieldOutput,
+                });
                 if (shield.payload) {
                     payload = shield.payload;
                     if (shield.meta.output) streaming = false;
@@ -1175,7 +1178,8 @@ function getSettings() {
     settings.pendingRetries ??= [];
     if (typeof settings.autoEnabled !== 'boolean') settings.autoEnabled = true;
     if (typeof settings.streamSummary !== 'boolean') settings.streamSummary = true;
-    for (const key of ['geminiShieldInput', 'geminiShieldOutput']) if (typeof settings[key] !== 'boolean') settings[key] = false;
+    if (typeof settings.geminiShieldInput !== 'boolean') settings.geminiShieldInput = DEFAULT_SETTINGS.geminiShieldInput;
+    if (typeof settings.geminiShieldOutput !== 'boolean') settings.geminiShieldOutput = DEFAULT_SETTINGS.geminiShieldOutput;
     if (!['main', 'secondary'].includes(settings.apiMode)) settings.apiMode = 'main';
     for (const key of ['secondaryUrl', 'secondaryKey', 'secondaryModel']) {
         if (typeof settings[key] !== 'string') settings[key] = '';
@@ -3611,6 +3615,17 @@ function syncActionState() {
     const mainLabel = { custom: '自定义连接', openai: 'OpenAI', claude: 'Claude', openrouter: 'OpenRouter' }[mainProvider] ?? mainProvider;
     setUiText('.als-runtime-api', settings.apiMode === 'secondary'
         ? `副 API · ${settings.secondaryModel || 'OpenAI 兼容接口'}` : mainLabel ? `主 API · ${mainLabel}` : '主 API · 跟随酒馆连接');
+    const shieldSwitch = ui.querySelector('.als-gemini-input');
+    if (shieldSwitch) {
+        const connection = settings.apiMode === 'secondary' ? { chat_completion_source: 'custom', model: settings.secondaryModel }
+            : context?.mainApi === 'openai' && context.chatCompletionSettings
+                ? { chat_completion_source: mainProvider, model: getChatModel?.(context.chatCompletionSettings) } : null;
+        const supported = isGeminiTarget(connection);
+        setUiHidden('.als-gemini-home', !supported);
+        shieldSwitch.checked = supported && geminiShieldInputEnabled(settings.geminiShieldInput, connection.model);
+        shieldSwitch.disabled = !settings.enabled || Boolean(sendLockDepth) || !supported;
+        setUiText('.als-gemini-state', settings.geminiShieldInput === null ? '随模型默认 · Gemini 4 默认开启' : '已保存手动选择');
+    }
     const actionContext = !settings.enabled ? '启用插件后可整理；记录页仍可查看历史。'
         : archive?.pendingContinuation ? `接续记忆尚未写入，请检查世界书“${archive.pendingContinuation.bookName}”并刷新。`
         : archive?.pendingSummarySave ? '上次写入结果尚未确认，请先刷新世界书状态。'
@@ -3677,7 +3692,7 @@ function syncActionState() {
 
 function populateSettingsDraft() {
     const controls = {
-        enabled: '.als-enabled', autoEnabled: '.als-auto-enabled', streamSummary: '.als-stream-summary', geminiShieldInput: '.als-gemini-input', geminiShieldOutput: '.als-gemini-output', threshold: '.als-threshold', keepRecent: '.als-keep',
+        enabled: '.als-enabled', autoEnabled: '.als-auto-enabled', streamSummary: '.als-stream-summary', geminiShieldOutput: '.als-gemini-output', threshold: '.als-threshold', keepRecent: '.als-keep',
         worldBookName: '.als-book', depth: '.als-depth', mode: '.als-settings-mode', promptStyle: '.als-settings-style',
         instructionPosition: '.als-instruction-position', instructionDepth: '.als-instruction-depth',
         instructionRole: '.als-instruction-role',
@@ -3930,7 +3945,22 @@ async function renderSettings() {
     ui.querySelector('.als-enabled').addEventListener('change', event => applyEnabledState(event.target.checked));
     bindInput('.als-auto-enabled', 'autoEnabled', Boolean);
     bindInput('.als-stream-summary', 'streamSummary', Boolean);
-    bindInput('.als-gemini-input', 'geminiShieldInput', Boolean);
+    ui.querySelector('.als-gemini-input').addEventListener('change', async event => {
+        if (!settings.enabled || sendLockDepth) { syncActionState(); return; }
+        const previous = settings.geminiShieldInput;
+        settings.geminiShieldInput = event.currentTarget.checked;
+        lockSending();
+        try {
+            await persistSettingsNow();
+            settingsDraft.geminiShieldInput = settings.geminiShieldInput;
+        } catch (error) {
+            settings.geminiShieldInput = previous;
+            notify('error', `Gemini 抗外审未保存：${error.message}`);
+        } finally {
+            unlockSending();
+            syncSettingsState();
+        }
+    });
     bindInput('.als-gemini-output', 'geminiShieldOutput', Boolean);
     bindInput('.als-threshold', 'threshold', value => Math.max(1, Math.floor(Number(value) || DEFAULT_SETTINGS.threshold)));
     bindInput('.als-keep', 'keepRecent', value => Math.max(1, Math.floor(Number(value) || DEFAULT_SETTINGS.keepRecent)));
@@ -4216,6 +4246,10 @@ async function renderSettings() {
     floatingPanel = mountFloatingPanel(ui, { onOpen: () => { showTab('overview'); syncActionState(); } });
     integrationReady = true;
     syncActionState();
+    void chatCompletionApi().then(api => {
+        getChatModel = api.getChatCompletionModel;
+        syncActionState();
+    }).catch(() => {});
     void updateWorldBookStatus();
     if (settings.enabled) void checkForUpdate({ silent: true });
     else setStatus('插件已关闭，不再检查上下文或切换总结条目喵。');

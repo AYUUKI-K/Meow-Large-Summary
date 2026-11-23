@@ -238,7 +238,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     autoEnabled: true,
     streamSummary: true,
     // Gemini 抗外审 / 抗截断（工具包装），默认关，用户自己打开
-    geminiShieldInput: false,
+    geminiShieldInput: null,
     geminiShieldOutput: false,
     threshold: 60000,
     keepRecent: 8,

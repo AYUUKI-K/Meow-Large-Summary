@@ -1,4 +1,4 @@
-// Gemini 抗外审 / 抗截断（可选，默认关）。
+// Gemini 抗外审 / 抗截断。抗外审默认跟随模型，抗截断按设置启用。
 // 做法与蓝图、果实预设的「输入输出工具传输」一致：
 // - 抗外审：把末尾要总结的资料换成一次工具调用的结果。Gemini 的输入审查主要看普通对话回合，
 //   整段聊天历史放在 user 里容易被 PROHIBITED_CONTENT 拦下，放进 functionResponse 则通常能过。
@@ -20,6 +20,11 @@ const textOf = content => typeof content === 'string' ? content : Array.isArray(
 
 export function isGeminiTarget(payload) {
     return GOOGLE.has(payload?.chat_completion_source) || /gemini/i.test(String(payload?.model ?? ''));
+}
+
+export function geminiShieldInputEnabled(preference, model) {
+    if (typeof preference === 'boolean') return preference;
+    return /(?:^|[/:])gemini[-_ ]?4(?=$|[.\-_/ :@])/i.test(String(model ?? '').trim());
 }
 
 export function shieldRequestId() {

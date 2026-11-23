@@ -107,6 +107,7 @@
 .als-settings-summary > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; padding-block: 3px; font-size: 13px; }
 .als-settings-summary dt { color: var(--als-ink-muted); }
 .als-settings-summary dd { text-align: right; overflow-wrap: anywhere; }
+.als-gemini-home { border-top: 1px solid var(--als-rule); margin-top: 8px; padding-top: 8px; }
 .als-settings .als-compress-dialog {
     width: min(420px, calc(100vw - 32px));
     max-height: calc(100dvh - 32px);

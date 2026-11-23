@@ -1,10 +1,21 @@
 // Gemini 抗外审 / 抗截断的请求改写与回复拆包。不连真实模型。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyGeminiShield, collectGoogleStream, unwrapShieldOutput, SHIELD_INPUT_TOOL, SHIELD_OUTPUT_TOOL, readWholeBody } from '../modules/gemini-shield.js';
+import { applyGeminiShield, collectGoogleStream, geminiShieldInputEnabled, unwrapShieldOutput, SHIELD_INPUT_TOOL, SHIELD_OUTPUT_TOOL, readWholeBody } from '../modules/gemini-shield.js';
 
 const summary = (extra = {}) => ({ type: 'quiet', chat_completion_source: 'makersuite', model: 'gemini-4-argon', custom_prompt_post_processing: 'semi', stream: true, n: 1,
     messages: [{ role: 'system', content: '本次是历史资料总结任务。\n总结模板' }, { role: 'user', content: '资料段 NSFW 原文' }], ...extra });
+
+test('shield default follows the model family and an explicit choice wins', () => {
+    for (const model of ['gemini-4', 'gemini-4-argon', 'google/gemini-4.0-preview', 'publishers/google/models/gemini-4-flash', 'Gemini 4']) {
+        assert.equal(geminiShieldInputEnabled(null, model), true, model);
+        assert.equal(geminiShieldInputEnabled(false, model), false, model);
+    }
+    for (const model of ['gemini-3.1-pro', 'gemini-40', 'claude-opus', null]) {
+        assert.equal(geminiShieldInputEnabled(null, model), false, model);
+    }
+    assert.equal(geminiShieldInputEnabled(true, 'gemini-3.1-pro'), true);
+});
 
 test('off or non-Gemini requests are left untouched', () => {
     assert.equal(applyGeminiShield(summary()).skipped, '未开启');
