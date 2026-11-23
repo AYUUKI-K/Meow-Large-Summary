@@ -343,6 +343,7 @@ for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-eve
 for (const [label, shield, expectRoles, target] of [
     ['Gemini 4 default', {}, ['user', 'assistant', 'tool']],
     ['PG Gemini 4 custom relay default', {}, ['user', 'assistant', 'tool'], { chat_completion_source: 'custom', model: 'pg-gemini-4-hydrogen' }],
+    ['Gemini 4 embedded model alias default', {}, ['user', 'assistant', 'tool'], { chat_completion_source: 'custom', model: 'relay.gemini-4preview' }],
     ['off', { geminiShieldInput: false, geminiShieldOutput: false }, ['user']],
     ['input', { geminiShieldInput: true, geminiShieldOutput: false }, ['user', 'assistant', 'tool']],
     ['input+output', { geminiShieldInput: true, geminiShieldOutput: true }, ['system', 'user', 'assistant', 'tool']],
