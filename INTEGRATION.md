@@ -14,7 +14,8 @@ cache-busted URL: the installed extension owns initialization.
 ## State
 
 `getState()` returns a frozen snapshot: `ready`, `enabled`, `autoEnabled`, `busy`,
-`paused`, `stage`, `tokens`, `sourceVersion`, and a short `message`. It contains no
+`paused`, `stage`, `tokens`, `sourceVersion`, `capabilities` (1.6.0: `runManual.template`,
+`compress`, `inputCap`; absent in older versions), and a short `message`. It contains no
 settings object, credentials, chat identity, prompt or summary text. The event
 `detail` has the same shape. `tokens: null` means no reliable count is available.
 
@@ -24,6 +25,16 @@ settings object, credentials, chat identity, prompt or summary text. The event
 - `await runManual({ mode: 'incremental' | 'merged' })` chooses a mode for this run
   only; it does not save or alter the user's mode or settings drafts.
 - `await runManual({ operation: 'compact' })` merges existing summaries only.
+- `await runManual({ mode, template: '…' })` (1.6.0) uses the given template for
+  this run only. It is not saved and does not alter the user's templates, mode or
+  drafts. It goes through the same macro expansion, input checks, segmentation,
+  save verification and hiding as a normal summary, and a resumed job keeps it.
+  Only for ordinary summaries; an empty string or use with `compact`/`compress`
+  throws `TypeError`.
+- `await runManual({ operation: 'compress', target })` (1.6.0) compresses the
+  existing summary to `target` tokens (default: the user's setting, minimum 500).
+  The result is counted with the host tokenizer and compressed again if needed, at
+  most three rounds. Like `compact`, it never changes message visibility.
 - `await setEnabled(boolean)` uses the native switch, cancellation, archive
   activation and confirmed settings-save path. `true` means persistence was
   confirmed; archive cleanup/synchronization may still be busy. Turning off while

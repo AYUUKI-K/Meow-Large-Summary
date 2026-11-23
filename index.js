@@ -1,4 +1,4 @@
-import { LEGACY_DEFAULT_PROMPT, DEFAULT_PROMPT, DEFAULT_MERGED_PROMPT, DEFAULT_SETTINGS, PROMPT_STYLE_LABELS, defaultPrompt, promptTemplates, migrateDefaultPrompt } from './modules/settings.js';
+import { LEGACY_DEFAULT_PROMPT, DEFAULT_PROMPT, DEFAULT_MERGED_PROMPT, DEFAULT_SETTINGS, PROMPT_STYLE_LABELS, TEMPLATE_MODES, defaultPrompt, promptTemplates, migrateDefaultPrompt } from './modules/settings.js';
 import { settingsMarkup, uiIcon } from './modules/settings-ui.js';
 import { renderSummaryReader, memoryExcerpt } from './modules/summary-reader.js';
 import { mountFloatingPanel } from './modules/floating-panel.js';
@@ -19,7 +19,7 @@ import { createSummaryJobStore, generateSummaryJob, summaryConnectionSignature }
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.5.0';
+const EXTENSION_VERSION = '1.6.0';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -36,9 +36,14 @@ let requestPreview = false;
 let thresholdCheckInProgress = false;
 let sendLockDepth = 0;
 const lockedControls = new Map();
-const SEND_CONTROL_SELECTOR = '#send_but, #option_continue, #option_regenerate, .swipe_left, .swipe_right, .als-settings input:not(.als-enabled), .als-settings .als-mode, .als-settings .als-style, .als-settings .als-api-mode, .als-model-select, .als-model-fetch, .als-settings .als-instruction-position, .als-settings .als-instruction-role, .als-settings .als-prompt, .als-run, .als-compact, .als-rebuild, .als-retain-memory, .als-retry-hide, .als-restore, .als-undo, .als-undo-restore, .als-settings-save, .als-settings-reset, .als-prompt-save, .als-prompt-use, .als-edit-running, .als-custom-template, .als-next-action, .als-prompt-reset, .als-delete-archive, .als-delete-round, .als-update-apply';
+const SEND_CONTROL_SELECTOR = '#send_but, #option_continue, #option_regenerate, .swipe_left, .swipe_right, .als-settings input:not(.als-enabled), .als-settings .als-mode, .als-settings .als-style, .als-settings .als-api-mode, .als-model-select, .als-model-fetch, .als-settings .als-instruction-position, .als-settings .als-instruction-role, .als-settings .als-prompt, .als-run, .als-compact, .als-compress, .als-rebuild, .als-retain-memory, .als-retry-hide, .als-restore, .als-undo, .als-undo-restore, .als-settings-save, .als-settings-reset, .als-prompt-save, .als-prompt-use, .als-edit-running, .als-custom-template, .als-next-action, .als-prompt-reset, .als-delete-archive, .als-delete-round, .als-update-apply';
 const worldBookPreparations = new Map();
 const MODE_LABELS = { incremental: '多次大总结', merged: '合并大总结' };
+// 编辑器里的模板槽位比运行模式多一个「压缩」
+const TEMPLATE_LABELS = { ...MODE_LABELS, compress: '压缩总结' };
+// 只读已有总结、不读新剧情、不隐藏楼层的操作
+const MERGE_ONLY = new Set(['compact', 'compress']);
+const COMPRESS_ROUNDS = 3;
 const DIRECTORY_PAGE_SIZE = 8;
 let directoryData = null;
 let directoryBookName = '';
@@ -85,7 +90,7 @@ const loadedIncompleteDrafts = new Set();
 const draftSaveTimers = new Map();
 const summaryJobs = new Map();
 const summaryJobStore = createSummaryJobStore();
-const SETTING_FIELDS = ['enabled', 'autoEnabled', 'streamSummary', 'threshold', 'keepRecent', 'worldBookName', 'depth', 'mode', 'promptStyle', 'instructionPosition', 'instructionDepth', 'instructionRole', 'apiMode', 'secondaryUrl', 'secondaryKey', 'secondaryModel', 'secondaryModels'];
+const SETTING_FIELDS = ['enabled', 'autoEnabled', 'streamSummary', 'threshold', 'keepRecent', 'worldBookName', 'depth', 'mode', 'promptStyle', 'instructionPosition', 'instructionDepth', 'instructionRole', 'apiMode', 'secondaryUrl', 'secondaryKey', 'secondaryModel', 'secondaryModels', 'inputCap', 'inputCapTokens', 'compressTarget'];
 const INSTRUCTION_POSITIONS = { tail: null, before: 2, after: 0, depth: 1 };
 
 function setStatus(message) {
@@ -106,6 +111,7 @@ function integrationState() {
         busy, paused, stage: activeRun?.stage ?? null,
         tokens: Number.isFinite(archive?.lastPromptTokens) ? archive.lastPromptTokens : null,
         sourceVersion: EXTENSION_VERSION,
+        capabilities: Object.freeze(['runManual.template', 'compress', 'inputCap']),
         message: !integrationReady ? '喵喵大总结正在准备' : busy ? taskLabel(activeRun) || '喵喵大总结正在处理'
             : !settings?.enabled ? '大总结已关闭' : paused ? '自动总结已暂停，请查看大总结面板'
                 : settings.autoEnabled ? '自动总结已开启' : '手动总结已就绪 · 自动触发关闭',
@@ -129,11 +135,14 @@ export const integration = Object.freeze({
         if (!integrationReady || (value && integrationState().busy)) return false;
         return await applyEnabledState(value);
     },
-    async runManual({ operation = 'summary', mode = null } = {}) {
-        if (!['summary', 'compact'].includes(operation)) throw new TypeError('operation 必须是 summary 或 compact。');
+    async runManual({ operation = 'summary', mode = null, template = null, target = null } = {}) {
+        if (!['summary', 'compact', 'compress'].includes(operation)) throw new TypeError('operation 必须是 summary、compact 或 compress。');
         if (mode !== null && (!Object.hasOwn(MODE_LABELS, mode) || operation !== 'summary')) throw new TypeError('mode 仅支持普通总结的 incremental 或 merged。');
+        if (template !== null && (operation !== 'summary' || typeof template !== 'string' || !template.trim())) throw new TypeError('template 仅用于普通总结，且必须是非空字符串。');
+        if (target !== null && (operation !== 'compress' || !Number.isFinite(target) || target < 500)) throw new TypeError('target 仅用于 compress，且至少 500 token。');
         if (!integrationReady || !settings?.enabled || integrationState().busy) return false;
-        return await runLargeSummary({ manual: true, operation, modeOverride: mode }) === true;
+        return await runLargeSummary({ manual: true, operation, modeOverride: mode, promptOverride: template,
+            compressTarget: target === null ? null : Math.floor(target) }) === true;
     },
     mount(container) {
         if (!integrationReady) return false;
@@ -187,7 +196,9 @@ function clearSummaryJob(archiveId, { committed = false } = {}) {
 async function resumeSummaryJob() {
     const job = summaryJob(getContext()?.chatMetadata?.[MODULE_NAME]?.archiveId);
     if (!job || job.invalid) return;
-    return await runLargeSummary({ manual: true, operation: job.operation, modeOverride: job.modeOverride });
+    return await runLargeSummary({ manual: true, operation: job.operation, modeOverride: job.modeOverride,
+        promptOverride: typeof job.promptOverride === 'string' ? job.promptOverride : null,
+        compressTarget: Number.isFinite(job.compressTarget) ? job.compressTarget : null });
 }
 
 function loadIncompleteDraft(archiveId) {
@@ -1164,12 +1175,15 @@ function getSettings() {
         };
         migrated = true;
     }
-    if (!settings.memoryPrompts || typeof settings.memoryPrompts !== 'object' || Array.isArray(settings.memoryPrompts)) {
-        settings.memoryPrompts = {};
+    for (const key of ['memoryPrompts', 'chroniclePrompts']) {
+        if (!settings[key] || typeof settings[key] !== 'object' || Array.isArray(settings[key])) settings[key] = {};
     }
+    if (!['safe', 'context', 'custom'].includes(settings.inputCap)) settings.inputCap = 'safe';
+    settings.inputCapTokens = Math.max(4000, Math.floor(Number(settings.inputCapTokens) || DEFAULT_SETTINGS.inputCapTokens));
+    settings.compressTarget = Math.max(500, Math.floor(Number(settings.compressTarget) || DEFAULT_SETTINGS.compressTarget));
     for (const style of Object.keys(PROMPT_STYLE_LABELS)) {
         const templates = promptTemplates(settings, style);
-        for (const mode of ['incremental', 'merged']) {
+        for (const mode of TEMPLATE_MODES) {
             const value = templates[mode];
             const template = typeof value === 'string' ? migrateDefaultPrompt(value, mode, style) : defaultPrompt(style, mode);
             if (template !== value) {
@@ -2118,17 +2132,39 @@ async function waitForCurrentGeneration(context, expectedChatId) {
     return false;
 }
 
+// 单次总结能塞多少原文。safe 是 1.5.0 的行为：自定义渠道报的上限可能不准，封顶 24000。
+// context / custom 给长上下文模型（如 Gemini）用，一次就能总结完，少用调用次数。
+function summaryInputBudget(hostBudget) {
+    const ceiling = Math.floor((hostBudget ?? 48000) * 0.7);
+    if (settings.inputCap === 'context' && Number.isFinite(hostBudget)) return ceiling;
+    if (settings.inputCap === 'custom') return Math.min(ceiling, settings.inputCapTokens);
+    return Math.min(24000, ceiling);
+}
+
+async function countSummaryTokens(context, text) {
+    if (typeof context.getTokenCountAsync === 'function') {
+        try { return await context.getTokenCountAsync(String(text), 0); } catch { /* 用字数估 */ }
+    }
+    return String(text).length;
+}
+
+function compressTask(target, extra = '') {
+    // 模型数不了 token，按字数给目标；中文按 0.8 字/token 估，插件再用真实 token 核对。
+    return `压缩已有总结，不加入新剧情；目标：全文不超过 ${target} token（约 ${Math.floor(target * 0.8)} 字）${extra ? `。${extra}` : ''}`;
+}
+
 async function generateResumableSummary(context, { archiveId, sourceChat, sourceEnd, sourceDigest, beforeEntry,
-    beforeRevision, operation, mode, modeOverride, prompt, template, combineNewSegments, checkpoint, keepRecent, hideEnd }) {
+    beforeRevision, operation, mode, modeOverride, prompt, template, combineNewSegments, checkpoint, keepRecent, hideEnd, compressTarget = null, promptOverride = null }) {
     const signature = textDigest(JSON.stringify([sourceDigest, sourceChat.map(message => Boolean(message?.is_system)),
-        beforeRevision, operation, mode, prompt, keepRecent, settings.apiMode, settings.secondaryUrl, settings.secondaryModel,
+        beforeRevision, operation, mode, prompt, keepRecent, compressTarget, settings.inputCap, settings.inputCapTokens, settings.apiMode, settings.secondaryUrl, settings.secondaryModel,
         settings.instructionPosition, settings.instructionDepth, settings.instructionRole, settings.worldBookName, summaryConnectionSignature(context)]));
     let job = summaryJob(archiveId);
     if (job && (job.invalid || job.signature !== signature)) {
         throw new Error('原文、总结或运行设置已改变，不能直接沿用旧进度。请先放弃进度，再重新总结。');
     }
     job ??= { version: 1, id: `${randomId()}-job-${Date.now()}`, archiveId, signature, sourceEnd,
-        operation, modeOverride, hideEnd: operation === 'compact' ? -1 : hideEnd, steps: [], result: null };
+        operation, modeOverride, hideEnd: MERGE_ONLY.has(operation) ? -1 : hideEnd, steps: [], result: null,
+        promptOverride, compressTarget };
     activeRun.job = job;
     saveSummaryJob(job);
     const check = () => {
@@ -2139,15 +2175,13 @@ async function generateResumableSummary(context, { archiveId, sourceChat, source
     };
     const background = operation === 'rebuild' ? checkpoint.content : beforeEntry?.content ?? '';
     const previousEnd = operation === 'rebuild' ? checkpoint.sourceEnd : entryMetadata(beforeEntry)?.sourceEnd ?? -1;
-    const sources = operation === 'compact' ? [{ label: '已有总结', text: background }]
+    const sources = MERGE_ONLY.has(operation) ? [{ label: '已有总结', text: background }]
         : sourceChat.flatMap((message, index) => !message || index <= previousEnd
             || (operation === 'summary' && message.is_system) ? []
             : [{ label: `第 ${index} 层 · ${message.name ?? (message.is_user ? '用户' : '角色')}`, text: String(message.mes ?? '') }]);
     let budget = await inputTokenBudget(context);
     check();
-    // Main-host input capacity is the only verified budget for custom providers.
-    // A conservative cap leaves room for chat framing and provider differences.
-    budget = Math.min(24000, Math.floor((budget ?? 48000) * 0.7));
+    budget = summaryInputBudget(budget);
     const count = async text => {
         if (text.length * 3 <= budget) return text.length * 3;
         if (typeof context.getTokenCountAsync !== 'function') return text.length * 3;
@@ -2159,7 +2193,7 @@ async function generateResumableSummary(context, { archiveId, sourceChat, source
     const promptFor = (source, merging = false) => sourceTaskPrompt(merging
         ? mergeTask
         : '整理本段全部资料，后续还会处理其他段；不要推测本段之外的事件', template, source);
-    const summary = await generateSummaryJob({ job, sources, background: operation === 'compact' ? '' : background,
+    let summary = await generateSummaryJob({ job, sources, background: MERGE_ONLY.has(operation) ? '' : background,
         merge: mode === 'merged', combineNewSegments, promptFor, count, budget, check, save: saveSummaryJob,
         progress: part => { activeRun.part = part; activeRun.stream = null; syncTaskState(); },
         generate: text => requestMainApiSummary(context, text, { sourceOnly: true }),
@@ -2168,12 +2202,42 @@ async function generateResumableSummary(context, { archiveId, sourceChat, source
         nativeGenerate: job.segmented || context.chat.length !== sourceChat.length ? null
             : () => requestMainApiSummary(context, prompt, { sourceOnly: operation !== 'summary' }),
     });
+    if (operation === 'compress') {
+        // 压完数一遍真实 token，超了拿这一版再压，最多 COMPRESS_ROUNDS 轮。每轮结果存进进度，继续总结时不重跑。
+        for (let round = 2; round <= COMPRESS_ROUNDS; round++) {
+            const tokens = await countSummaryTokens(context, summary);
+            check();
+            job.compressTokens = tokens;
+            if (tokens <= compressTarget) break;
+            const roundPrompt = sourceTaskPrompt(compressTask(compressTarget,
+                `上一次压缩后仍有约 ${tokens} token。请再压缩到 ${compressTarget} token 以内，优先合并远期事件`), template, summary);
+            if (Number.isFinite(budget) && await count(roundPrompt) > budget) break;
+            const key = textDigest(`compress\n${roundPrompt}`);
+            const saved = job.steps.find(step => step.key === key);
+            let text = saved?.text;
+            if (!text) {
+                activeRun.part = `压缩第 ${round}/${COMPRESS_ROUNDS} 轮`;
+                activeRun.stream = null;
+                syncTaskState();
+                text = String(await requestMainApiSummary(context, roundPrompt, { sourceOnly: true })).trim();
+                check();
+                if (!text) break;
+                job.steps.push({ key, text });
+            }
+            summary = text;
+            job.result = summary;
+            saveSummaryJob(job);
+        }
+        job.compressTokens = await countSummaryTokens(context, summary);
+        saveSummaryJob(job);
+    }
     rememberIncompleteDraft(archiveId, summary, '正文已生成，尚未确认写入世界书；继续总结会重试保存。');
     return summary;
 }
 
-async function runLargeSummary({ manual = false, operation = 'summary', modeOverride = null } = {}) {
-    if (!['summary', 'compact', 'rebuild'].includes(operation)) return false;
+async function runLargeSummary({ manual = false, operation = 'summary', modeOverride = null, promptOverride = null, compressTarget = null } = {}) {
+    if (!['summary', 'compact', 'compress', 'rebuild'].includes(operation)) return false;
+    if (promptOverride !== null && (operation !== 'summary' || typeof promptOverride !== 'string' || !promptOverride.trim())) return false;
     if (modeOverride !== null && (!Object.hasOwn(MODE_LABELS, modeOverride) || operation !== 'summary')) return false;
     if (operation !== 'summary') manual = true;
     if (!settings?.enabled) return false;
@@ -2272,9 +2336,10 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         if (operation === 'summary' && archiveInfo.archive.branch?.needsRebuild) {
             throw new Error('本分支需要先更新记忆，确认可复用的有效旧总结，避免继承分叉后的剧情。');
         }
-        if (operation === 'compact' && !beforeEntry?.content?.trim()) {
-            setStatus('当前存档还没有可合并的总结。');
-            if (manual) notify('info', '当前存档还没有可合并的总结。');
+        if (MERGE_ONLY.has(operation) && !beforeEntry?.content?.trim()) {
+            const message = operation === 'compress' ? '当前存档还没有可压缩的总结。' : '当前存档还没有可合并的总结。';
+            setStatus(message);
+            if (manual) notify('info', message);
             return false;
         }
         const keepRecent = Math.max(1, Math.floor(Number(settings.keepRecent) || 1));
@@ -2285,7 +2350,7 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
             notify('warning', message);
             return false;
         }
-        const range = operation === 'compact'
+        const range = MERGE_ONLY.has(operation)
             ? { coveredFrom: entryMetadata(beforeEntry)?.coveredFrom ?? 0, coveredTo: entryMetadata(beforeEntry)?.coveredTo ?? -1, keepRecent }
             : operation === 'rebuild'
                 ? { coveredFrom: 0, coveredTo: summaryScope(sourceChat, keepRecent).coveredTo, keepRecent }
@@ -2303,14 +2368,20 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         const sourceDigest = textDigest(JSON.stringify(sourceSnapshot.map(message => message.fingerprint)));
         const mode = operation === 'summary' ? modeOverride ?? settings.mode : 'merged';
         const promptStyle = settings.promptStyle;
-        const template = operation === 'summary' && modeOverride === null ? settings.prompt : promptTemplates(settings)[mode];
-        const combineNewSegments = mode === 'incremental'
+        // 单次传入的提示词（集成接口）> 压缩模板 > 用户保存的模板
+        const template = promptOverride !== null ? promptOverride
+            : operation === 'compress' ? promptTemplates(settings)?.compress ?? defaultPrompt(promptStyle, 'compress')
+                : operation === 'summary' && modeOverride === null ? settings.prompt : promptTemplates(settings)[mode];
+        const target = operation === 'compress'
+            ? Math.max(500, Math.floor(Number(compressTarget) || settings.compressTarget || DEFAULT_SETTINGS.compressTarget)) : null;
+        const combineNewSegments = promptOverride === null && mode === 'incremental'
             && template.trim().replace(/\r\n?/g, '\n') === defaultPrompt(promptStyle, mode);
         let prompt = context.substituteParamsExtended
             ? await context.substituteParamsExtended(template)
             : template;
         const resolvedTemplate = prompt;
         if (operation === 'compact') prompt = sourceTaskPrompt('仅合并已有总结，不加入新剧情', prompt, beforeEntry.content);
+        if (operation === 'compress') prompt = sourceTaskPrompt(compressTask(target), prompt, beforeEntry.content);
         if (operation === 'rebuild') prompt = sourceTaskPrompt('沿用有效旧总结并更新后续记忆', prompt,
             `【已验证有效的旧总结，覆盖至第 ${checkpoint.sourceEnd} 层】\n${checkpoint.content}\n\n`
             + `【后续原文，从第 ${checkpoint.sourceEnd + 1} 层开始；包含这一区间内的隐藏消息】\n`
@@ -2320,11 +2391,12 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         assertSummaryActive();
 
         updateTaskStage('generating');
-        showProgress(operation === 'compact' ? '正在合并已有总结，不改变消息可见状态…' : '正在大总结中，请等待…');
+        showProgress(operation === 'compact' ? '正在合并已有总结，不改变消息可见状态…'
+            : operation === 'compress' ? `正在压缩已有总结（目标 ${target} token），不改变消息可见状态…` : '正在大总结中，请等待…');
         const summary = checkpoint?.sourceEnd === sourceEnd ? checkpoint.content
             : await generateResumableSummary(context, { archiveId: archiveInfo.archive.archiveId, sourceChat, sourceEnd,
                 sourceDigest, beforeEntry, beforeRevision, operation, mode, modeOverride, prompt: String(prompt),
-                template: String(resolvedTemplate), combineNewSegments, checkpoint, keepRecent, hideEnd: range.coveredTo });
+                template: String(resolvedTemplate), combineNewSegments, checkpoint, keepRecent, hideEnd: range.coveredTo, compressTarget: target, promptOverride });
         assertSummaryActive();
         const latestContext = getContext();
         const latestIdentity = getCharacterAndChat(latestContext);
@@ -2372,16 +2444,16 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
         if (!existingEntry) while (Object.hasOwn(data.entries, uid)) uid += 1;
         const now = new Date();
         const operationId = `${randomId()}-${++operationSequence}`;
-        const recordSourceEnd = operation === 'compact' ? entryMetadata(existingEntry)?.sourceEnd ?? null : sourceEnd;
-        const recordSourceDigest = operation === 'compact' ? entryMetadata(existingEntry)?.sourceDigest ?? null : sourceDigest;
+        const recordSourceEnd = MERGE_ONLY.has(operation) ? entryMetadata(existingEntry)?.sourceEnd ?? null : sourceEnd;
+        const recordSourceDigest = MERGE_ONLY.has(operation) ? entryMetadata(existingEntry)?.sourceDigest ?? null : sourceDigest;
         const previousMeta = entryMetadata(existingEntry);
         const edit = hasWorldBookEdit(existingEntry) ? previousRecords.at(-1) : null;
         const journal = {
-            id: operationId, operation, phase: operation === 'compact' ? 'complete' : 'saved',
+            id: operationId, operation, phase: MERGE_ONLY.has(operation) ? 'complete' : 'saved',
             jobId: activeRun.job?.id,
-            sourceEnd, sourceDigest, hideEnd: operation === 'compact' ? -1 : range.coveredTo,
+            sourceEnd, sourceDigest, hideEnd: MERGE_ONLY.has(operation) ? -1 : range.coveredTo,
             manualEpoch: archiveInfo.archive.visibilityEpoch ?? '',
-            changes: operation === 'compact' ? [] : visibilityChanges(latestContext.chat, range.coveredTo),
+            changes: MERGE_ONLY.has(operation) ? [] : visibilityChanges(latestContext.chat, range.coveredTo),
             previous: { content: existingEntry?.content ?? '', round: edit?.round ?? previousMeta?.round ?? 0,
                 coveredTo: previousMeta?.coveredTo ?? -1, sourceEnd: previousMeta?.sourceEnd ?? null,
                 sourceDigest: previousMeta?.sourceDigest ?? null, mode: edit?.mode ?? previousMeta?.mode ?? 'incremental',
@@ -2470,7 +2542,7 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
             return;
         }
         const hideStart = 0;
-        const hideEnd = operation === 'compact' ? -1 : Math.min(range.coveredTo, liveContext.chat.length - range.keepRecent - 1);
+        const hideEnd = MERGE_ONLY.has(operation) ? -1 : Math.min(range.coveredTo, liveContext.chat.length - range.keepRecent - 1);
         if (hideEnd >= hideStart) {
             await verifySummaryInjection(liveContext, persistedEntry);
             assertSummaryActive();
@@ -2493,7 +2565,7 @@ async function runLargeSummary({ manual = false, operation = 'summary', modeOver
                 throw new Error('总结已保存，但旧楼层未全部隐藏，请检查 /hide 命令。');
             }
         }
-        if (operation !== 'compact') await updateSavedOperation(liveContext, archiveInfo, operationId, entry => {
+        if (!MERGE_ONLY.has(operation)) await updateSavedOperation(liveContext, archiveInfo, operationId, entry => {
             const savedOperation = entryMetadata(entry).lastOperation;
             savedOperation.phase = 'complete';
             savedOperation.result = { newHidden: journal.changes.length, keptVisible: liveContext.chat.filter(message => message && !message.is_system).length };
@@ -2876,7 +2948,7 @@ function showSummary(entry, { refresh = false } = {}) {
     for (let index = records.length - 1; index >= 0; index--) {
         const record = records[index];
         const styleLabel = PROMPT_STYLE_LABELS[record.promptStyle];
-        const kind = record.operation === 'manual-edit' ? '世界书手改' : record.operation === 'carry' ? '接续记忆' : record.operation === 'compact' ? '仅合并' : MODE_LABELS[record.mode] ?? '多次大总结';
+        const kind = record.operation === 'manual-edit' ? '世界书手改' : record.operation === 'carry' ? '接续记忆' : record.operation === 'compact' ? '仅合并' : record.operation === 'compress' ? '压缩' : MODE_LABELS[record.mode] ?? '多次大总结';
         const option = createElement('option', '', `第 ${record.round} 次 · ${kind}${styleLabel ? ` · ${styleLabel}` : ''}${record.undone ? ' · 已撤销' : ''}`);
         option.value = String(index);
         select.append(option);
@@ -3143,11 +3215,12 @@ function syncPromptEditor() {
     ui.querySelector('.als-mode-description').textContent = settingsDraft.mode === 'incremental'
         ? '每轮只记新增剧情喵，接着写进这个聊天档的原条目。'
         : '把旧总结和新剧情整理到一起喵，用新全文替换原条目，历史记录仍会留着。';
-    setUiText('.als-style-description', settingsDraft.promptStyle === 'memory'
-        ? '按因果、关系、约定、知情范围和接续状态分类，方便查找仍有效的记忆。'
-        : '按关键转折记下起因与结果，必要时附角色表。');
+    setUiText('.als-style-description', {
+        memory: '按因果、关系、约定、知情范围和接续状态分类，方便查找仍有效的记忆。',
+        chronicle: '按时间线流水账记事，附主要角色、伏笔人物、伏笔清单和重要记忆锚点；不重复记人设和档案。',
+    }[settingsDraft.promptStyle] ?? '按关键转折记下起因与结果，必要时附角色表。');
     ui.querySelector('.als-prompt-state').textContent = draft === savedEditorPrompt() ? '提示词已经记住喵' : '还没保存喵';
-    setUiText('.als-prompt-context', `当前运行：${PROMPT_STYLE_LABELS[settings.promptStyle]} · ${MODE_LABELS[settings.mode]}。正在编辑：${PROMPT_STYLE_LABELS[promptEditorStyle]} · ${MODE_LABELS[promptEditorMode]}。`);
+    setUiText('.als-prompt-context', `当前运行：${PROMPT_STYLE_LABELS[settings.promptStyle]} · ${MODE_LABELS[settings.mode]}。正在编辑：${PROMPT_STYLE_LABELS[promptEditorStyle]} · ${TEMPLATE_LABELS[promptEditorMode]}。`);
     setUiText('.als-running-template-name', `${PROMPT_STYLE_LABELS[settings.promptStyle]} · ${MODE_LABELS[settings.mode]}`);
     setUiText('.als-prompt-length', `${draft.length.toLocaleString()} 字符`);
     syncEditorActions();
@@ -3216,7 +3289,7 @@ function discardSettingsDraft() {
 }
 
 function changeMode(mode) {
-    if (sendLockDepth || !Object.hasOwn(MODE_LABELS, mode)) return;
+    if (sendLockDepth || !Object.hasOwn(TEMPLATE_LABELS, mode)) return;
     promptEditorMode = mode;
     syncPromptEditor();
 }
@@ -3241,7 +3314,8 @@ async function savePromptDraft({ use = false } = {}) {
     const previousRuntime = { mode: settings.mode, promptStyle: settings.promptStyle };
     promptDrafts[promptDraftKey()] = draft;
     templates[mode] = draft;
-    if (use) Object.assign(settings, { mode, promptStyle: style });
+    // 压缩模板不是运行模式：「保存并使用」只切换风格
+    if (use) Object.assign(settings, Object.hasOwn(MODE_LABELS, mode) ? { mode, promptStyle: style } : { promptStyle: style });
     settings.prompt = promptTemplates(settings)[settings.mode];
     lockSending();
     try {
@@ -3255,8 +3329,8 @@ async function savePromptDraft({ use = false } = {}) {
         }
         syncPromptEditor();
         syncSettingsState();
-        const active = style === settings.promptStyle && mode === settings.mode;
-        notify('success', `${PROMPT_STYLE_LABELS[style]} · ${MODE_LABELS[mode]}提示词已保存${active ? '并生效' : `；当前仍使用 ${PROMPT_STYLE_LABELS[settings.promptStyle]} · ${MODE_LABELS[settings.mode]}`}，刷新或重启也会记得喵。`);
+        const active = style === settings.promptStyle && (mode === settings.mode || mode === 'compress');
+        notify('success', `${PROMPT_STYLE_LABELS[style]} · ${TEMPLATE_LABELS[mode]}提示词已保存${active ? '并生效' : `；当前仍使用 ${PROMPT_STYLE_LABELS[settings.promptStyle]} · ${MODE_LABELS[settings.mode]}`}，刷新或重启也会记得喵。`);
     } catch (error) {
         templates[mode] = previous;
         Object.assign(settings, previousRuntime);
@@ -3286,6 +3360,7 @@ function syncSettingsState() {
     const atDepth = settingsDraft.instructionPosition === 'depth';
     ui.querySelector('.als-instruction-depth-field').hidden = !atDepth;
     ui.querySelector('.als-instruction-role-field').hidden = settingsDraft.instructionPosition === 'tail';
+    setUiHidden('.als-input-cap-tokens-field', settingsDraft.inputCap !== 'custom');
     const secondary = ui.querySelector('.als-secondary-settings');
     if (secondary) secondary.hidden = settingsDraft.apiMode !== 'secondary';
     syncOperationalControls();
@@ -3408,6 +3483,7 @@ function syncActionState() {
         '.als-resume': busy || !job || job.invalid || Boolean(archive?.pendingSummarySave),
         '.als-run': busy || needsRebuild || !scope.range,
         '.als-compact': busy || Boolean(job) || !entry?.content?.trim() || needsRebuild,
+        '.als-compress': busy || Boolean(job) || !entry?.content?.trim() || needsRebuild,
         '.als-rebuild': busy || !(needsRebuild || retained),
         '.als-retain-memory': busy || !archive?.sourceChanged || !entry?.content?.trim()
             || Boolean(archive.pendingSummarySave || journal?.phase === 'saved' || (journal?.combinedRestorePending && !journal.messagesRestored)),
@@ -3434,6 +3510,7 @@ function syncActionState() {
     setUiHidden('.als-recovery', !journal);
     setUiHidden('.als-retry-hide', journal?.phase !== 'saved' || Boolean(journal?.messagesRestored));
     setUiHidden('.als-compact', !entry?.content?.trim());
+    setUiHidden('.als-compress', !entry?.content?.trim());
     const rebuild = ui.querySelector('.als-rebuild');
     if (rebuild) {
         rebuild.hidden = !(needsRebuild || retained);
@@ -3541,9 +3618,11 @@ function populateSettingsDraft() {
         instructionRole: '.als-instruction-role',
         apiMode: '.als-api-mode', secondaryUrl: '.als-secondary-url',
         secondaryKey: '.als-secondary-key', secondaryModel: '.als-secondary-model',
+        inputCap: '.als-input-cap', inputCapTokens: '.als-input-cap-tokens', compressTarget: '.als-compress-target',
     };
     for (const [key, selector] of Object.entries(controls)) {
         const input = ui.querySelector(selector);
+        if (!input) continue;
         if (input.type === 'checkbox') input.checked = Boolean(settingsDraft[key]);
         else input.value = settingsDraft[key];
     }
@@ -3817,6 +3896,9 @@ async function renderSettings() {
     bindInput('.als-instruction-position', 'instructionPosition', String);
     bindInput('.als-instruction-depth', 'instructionDepth', value => Math.min(10000, Math.max(0, Math.floor(Number(value) || 0))));
     bindInput('.als-instruction-role', 'instructionRole', Number);
+    bindInput('.als-input-cap', 'inputCap', String);
+    bindInput('.als-input-cap-tokens', 'inputCapTokens', value => Math.max(4000, Math.floor(Number(value) || DEFAULT_SETTINGS.inputCapTokens)));
+    bindInput('.als-compress-target', 'compressTarget', value => Math.max(500, Math.floor(Number(value) || DEFAULT_SETTINGS.compressTarget)));
     ui.querySelector('.als-prompt-mode').addEventListener('change', event => changeMode(event.target.value));
     ui.querySelector('.als-prompt-style').addEventListener('change', event => changePromptStyle(event.target.value));
     ui.querySelector('.als-settings-save').addEventListener('click', () => void saveSettingsDraft());
@@ -3891,6 +3973,7 @@ async function renderSettings() {
     });
     ui.querySelector('.als-run').addEventListener('click', () => runLargeSummary({ manual: true }));
     ui.querySelector('.als-compact').addEventListener('click', () => runLargeSummary({ operation: 'compact' }));
+    ui.querySelector('.als-compress').addEventListener('click', () => runLargeSummary({ operation: 'compress' }));
     ui.querySelector('.als-rebuild').addEventListener('click', () => {
         if (window.confirm('检查仍有效的旧总结，只整理它之后的原文来更新记忆？没有有效旧总结时会停止，不会全量重跑历史。成功后替换当前记忆，历史保留，并按设置隐藏一次旧消息。')) {
             void runLargeSummary({ operation: 'rebuild' });

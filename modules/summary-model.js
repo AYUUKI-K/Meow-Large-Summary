@@ -165,7 +165,7 @@ export function summaryResultText(operation, tokens) {
     if (operation.messagesRestored) return '本轮隐藏的消息已恢复。';
     if (operation.phase === 'saved') return '总结已保存，隐藏未完成；可在“恢复与撤销”中只重试隐藏。';
     const result = operation.result;
-    const parts = operation.operation === 'compact' ? ['仅合并已保存，消息可见状态保持原样']
+    const parts = ['compact', 'compress'].includes(operation.operation) ? [`${operation.operation === 'compress' ? '压缩' : '仅合并'}已保存，消息可见状态保持原样`]
         : Number.isInteger(result?.newHidden) ? [`本次新隐藏 ${result.newHidden} 条`] : ['总结已保存，隐藏已完成'];
     if (Number.isInteger(result?.keptVisible)) parts.push(`保留原文 ${result.keptVisible} 条`);
     if (Number.isFinite(tokens)) parts.push(`当前上下文 ${tokens.toLocaleString()} token`);
@@ -227,5 +227,5 @@ export function sourceDescription(record) {
         ? `总结时到第 ${record.sourceEnd} 层（${record.sourceEnd + 1} 条消息）` : '旧记录未保存总结来源终点';
     const hidden = Number.isInteger(record.coveredTo) && record.coveredTo >= 0
         ? `隐藏计划到第 ${record.coveredTo} 层` : '没有隐藏计划';
-    return `${record.undone ? '已撤销 · ' : ''}${source}；${record.operation === 'compact' ? '仅合并，未隐藏消息' : hidden}`;
+    return `${record.undone ? '已撤销 · ' : ''}${source}；${record.operation === 'compact' ? '仅合并，未隐藏消息' : record.operation === 'compress' ? '压缩，未隐藏消息' : hidden}`;
 }

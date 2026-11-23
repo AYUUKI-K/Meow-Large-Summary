@@ -3894,3 +3894,113 @@ test('silent native model requests time out, release controls and retain a retry
     assert.ok(f.api.evaluate('summaryJob("archive-a")'));
     assert.match(f.controls.get('.als-status').textContent, /5 分钟/);
 });
+
+// ── 1.6.0：单次输入上限、压缩总结、纪实详述风格、单次模板 ──
+
+test('input cap: safe keeps the 1.5.0 budget, context and custom lift the 24000 ceiling but never exceed 70%', async () => {
+    const f = await fixture();
+    const budget = (cap, host, tokens = 100000) => f.api.evaluate(`settings.inputCap = '${cap}'; settings.inputCapTokens = ${tokens}; summaryInputBudget(${host})`);
+    assert.equal(budget('safe', 1000000), 24000);
+    assert.equal(budget('safe', 20000), 14000);
+    assert.equal(budget('context', 1000000), 700000);
+    assert.equal(budget('context', null), 24000, 'unknown host capacity falls back to the safe budget');
+    assert.equal(budget('custom', 1000000, 100000), 100000);
+    assert.equal(budget('custom', 50000, 100000), 35000);
+});
+
+test('settings normalization fills new templates and fields without touching saved custom prompts', async () => {
+    const f = await fixture({ inputCap: 'huge', compressTarget: 'x', prompts: { incremental: '传统新增', merged: '传统合并' } });
+    const s = f.api.state().settings;
+    assert.equal(s.inputCap, 'safe');
+    assert.equal(s.compressTarget, 5000);
+    assert.equal(s.prompts.incremental, '传统新增');
+    assert.equal(s.prompts.merged, '传统合并');
+    for (const style of ['traditional', 'memory', 'chronicle']) {
+        const key = { traditional: 'prompts', memory: 'memoryPrompts', chronicle: 'chroniclePrompts' }[style];
+        assert.equal(s[key].compress, defaultPrompt(style, 'compress'));
+    }
+    for (const mode of ['incremental', 'merged']) assert.equal(s.chroniclePrompts[mode], defaultPrompt('chronicle', mode));
+    assert.match(s.chroniclePrompts.merged, /人设、档案内的内容为了避免重复不记录/);
+});
+
+test('chronicle style runs its own template for normal summaries', async () => {
+    const f = await fixture({ autoEnabled: false, promptStyle: 'chronicle', mode: 'merged' });
+    f.prepareSummary();
+    f.api.evaluate(`requestMainApiSummary = async (_context, prompt) => { __fixtures.usedPrompt = prompt; return '纪实结果'; };`);
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+    assert.match(f.sandbox.__fixtures.usedPrompt, /开始执行\*\*全文大总结\*\*/);
+    assert.match(f.sandbox.__fixtures.usedPrompt, /重要记忆锚点/);
+    assert.equal(bookEntry(f).extensions.auto_large_summary.records.at(-1).promptStyle, 'chronicle');
+});
+
+test('compression reaching the target in one round saves once and leaves visibility alone', async () => {
+    const f = await fixture({ autoEnabled: false });
+    f.prepareSummary();
+    await f.api.runLargeSummary({ manual: true });
+    const flags = structuredClone(f.context.chat);
+    const executed = f.executed.length;
+    f.context.getTokenCountAsync = async text => String(text).length;
+    let calls = 0;
+    f.api.evaluate(`requestMainApiSummary = async (_context, prompt, options) => {
+        __fixtures.calls = (__fixtures.calls ?? 0) + 1;
+        if (!options.sourceOnly || !prompt.includes('目标：全文不超过 5000 token')) throw new Error('missing compress task');
+        return '压缩后的短总结';
+    };`);
+    assert.equal(await f.api.runLargeSummary({ operation: 'compress' }), true);
+    calls = f.sandbox.__fixtures.calls;
+    assert.equal(calls, 1);
+    const entry = bookEntry(f);
+    assert.equal(entry.content, '压缩后的短总结');
+    assert.equal(entry.extensions.auto_large_summary.records.at(-1).operation, 'compress');
+    assert.equal(f.executed.length, executed, 'compression never hides messages');
+    assert.deepEqual(f.context.chat, flags);
+    assert.equal(f.api.state().sendLockDepth, 0);
+});
+
+test('compression re-compresses until under target and stops after three rounds', async () => {
+    for (const [outputs, expectedCalls, expectedContent] of [
+        [['x'.repeat(900), 'y'.repeat(300)], 2, 'y'.repeat(300)],
+        [['x'.repeat(900), 'y'.repeat(800), 'z'.repeat(700)], 3, 'z'.repeat(700)],
+    ]) {
+        const f = await fixture({ autoEnabled: false, compressTarget: 500 });
+        f.prepareSummary();
+        await f.api.runLargeSummary({ manual: true });
+        f.context.getTokenCountAsync = async text => String(text).length;
+        f.sandbox.__fixtures.outputs = outputs;
+        f.api.evaluate(`requestMainApiSummary = async (_context, prompt) => {
+            const index = __fixtures.compressCalls = (__fixtures.compressCalls ?? 0) + 1;
+            if (index > 1 && !prompt.includes('上一次压缩后仍有约')) throw new Error('missing retry note');
+            return __fixtures.outputs[index - 1] ?? 'should not be asked';
+        };`);
+        assert.equal(await f.api.runLargeSummary({ operation: 'compress' }), true);
+        assert.equal(f.sandbox.__fixtures.compressCalls, expectedCalls);
+        assert.equal(bookEntry(f).content, expectedContent);
+    }
+});
+
+test('compression of an empty archive does not call the model', async () => {
+    const f = await fixture();
+    f.prepareSummary();
+    f.api.evaluate('requestMainApiSummary = async () => { throw new Error("must not call"); };');
+    assert.equal(await f.api.runLargeSummary({ operation: 'compress' }), false);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.api.state().sendLockDepth, 0);
+});
+
+test('integration template override runs once without saving and new options are validated', async () => {
+    const f = await fixture({ autoEnabled: false, prompts: { incremental: 'incremental-template', merged: 'merged-template' } });
+    f.prepareSummary();
+    f.api.evaluate(`integrationReady = true;
+        requestMainApiSummary = async (context, prompt) => { __fixtures.usedPrompt = prompt; return 'summary result'; };`);
+    const api = f.sandbox.window.MeowLargeSummary;
+    const before = structuredClone(f.api.state().settings);
+    assert.ok(api.getState().capabilities.includes('runManual.template'));
+    assert.ok(api.getState().capabilities.includes('compress'));
+    assert.equal(await api.runManual({ mode: 'merged', template: '蓝图的单次模板' }), true);
+    assert.equal(f.sandbox.__fixtures.usedPrompt, '蓝图的单次模板');
+    assert.deepEqual(structuredClone(f.api.state().settings), before);
+    await assert.rejects(api.runManual({ operation: 'compact', template: 'x' }), /template/);
+    await assert.rejects(api.runManual({ template: '  ' }), /template/);
+    await assert.rejects(api.runManual({ operation: 'summary', target: 3000 }), /target/);
+    await assert.rejects(api.runManual({ operation: 'compress', target: 100 }), /target/);
+});

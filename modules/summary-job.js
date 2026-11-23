@@ -22,7 +22,7 @@ export function createSummaryJobStore(storage = () => globalThis.localStorage) {
             const job = JSON.parse(raw);
             if (job?.version !== 1 || job.archiveId !== id || typeof job.id !== 'string'
                 || typeof job.signature !== 'string' || !Number.isInteger(job.sourceEnd) || job.sourceEnd < -1
-                || !['summary', 'compact', 'rebuild'].includes(job.operation)
+                || !['summary', 'compact', 'compress', 'rebuild'].includes(job.operation)
                 || ![null, 'incremental', 'merged'].includes(job.modeOverride)
                 || !Array.isArray(job.steps) || job.steps.some(step => typeof step?.key !== 'string' || typeof step?.text !== 'string')
                 || (job.result !== null && typeof job.result !== 'string')) throw new Error('总结进度无法读取，请放弃此进度后重试。');

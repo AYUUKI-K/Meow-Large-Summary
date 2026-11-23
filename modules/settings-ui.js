@@ -78,6 +78,7 @@ export function settingsMarkup(version) {
               <p class="als-auto-status als-help"></p><p class="als-token-comparison als-help"></p><p class="als-last-operation als-muted"></p>
               <div class="als-book-state"><span class="als-book-status als-muted">正在读取世界书状态…</span><button type="button" class="als-icon-button als-book-check" aria-label="刷新世界书状态" title="刷新世界书状态">${uiIcon('refresh')}</button></div>
               <button type="button" class="menu_button als-compact">仅合并已有总结</button>
+              <button type="button" class="menu_button als-compress" title="把这个聊天的总结压到设置里的目标 token 以内，不读新剧情、不改消息可见状态">压缩总结</button>
               <button type="button" class="menu_button als-carry-current" disabled>带总结开新聊天</button>
               <button type="button" class="menu_button als-choose-import" hidden>从旧档导入总结</button>
             <details class="als-recovery als-disclosure"><summary>${uiIcon('undo')}<span>恢复与撤销</span><span class="als-disclosure-note">最近一次操作</span></summary>
@@ -101,8 +102,12 @@ export function settingsMarkup(version) {
               <p class="als-help als-budget-warning" role="status" hidden></p>
             </section>
             <section class="als-form-section"><h4>总结方式</h4>
-              <div class="als-grid"><label class="als-field">总结风格<select class="text_pole als-style als-settings-style"><option value="traditional">传统详述</option><option value="memory">结构记忆</option></select></label><label class="als-field">运行模式<select class="text_pole als-mode als-settings-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option></select></label></div>
+              <div class="als-grid"><label class="als-field">总结风格<select class="text_pole als-style als-settings-style"><option value="traditional">传统详述</option><option value="memory">结构记忆</option><option value="chronicle">纪实详述 @KKM</option></select></label><label class="als-field">运行模式<select class="text_pole als-mode als-settings-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option></select></label></div>
               <p class="als-style-description als-help"></p><p class="als-mode-description als-help"></p>
+              <div class="als-grid"><label class="als-field">单次输入上限<select class="text_pole als-input-cap"><option value="safe">稳妥（默认）</option><option value="context">按主连接上限</option><option value="custom">自定义</option></select></label><label class="als-field als-input-cap-tokens-field" hidden>自定义上限 token<input class="text_pole als-input-cap-tokens" type="number" min="4000" step="1000"></label></div>
+              <p class="als-help">总结的原文超过上限时会分段，每段调用一次模型。「稳妥」最多 24000 token，和以前一样。长上下文模型（如 Gemini）选「按主连接上限」，通常一次就能总结完，少用调用次数；自定义渠道报的上下文不准时用「稳妥」。无论哪档，都不超过主连接上限的 70%。</p>
+              <label class="als-field">压缩目标 token<input class="text_pole als-compress-target" type="number" min="500" step="500"></label>
+              <p class="als-help">「压缩总结」把这个聊天的总结压到这个长度以内；压完会数一遍，超了再压，最多 3 轮。</p>
               <button type="button" class="als-text-button als-custom-template">自定义提示词 ${uiIcon('arrow')}</button>
             </section>
             <section class="als-form-section"><h4>API 与模型</h4><label class="als-field">总结使用的 API<select class="text_pole als-api-mode"><option value="main">主 API · 跟随当前酒馆连接</option><option value="secondary">副 API · OpenAI 兼容接口</option></select></label>
@@ -136,7 +141,7 @@ export function settingsMarkup(version) {
              <button type="button" class="als-text-button als-back-settings">${uiIcon('back')} 返回设置</button><h3>自定义提示词</h3>
             <details class="als-disclosure als-template-options"><summary>选择其他模板</summary><div class="als-disclosure-body">
               <div class="als-running-template"><span class="als-eyebrow">实际运行模板</span><strong class="als-running-template-name"></strong><button type="button" class="als-text-button als-edit-running">编辑当前运行模板</button></div>
-            <div class="als-grid"><label class="als-field">编辑风格<select class="text_pole als-style als-prompt-style"><option value="traditional">传统详述</option><option value="memory">结构记忆</option></select></label><label class="als-field">编辑模式<select class="text_pole als-mode als-prompt-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option></select></label></div>
+            <div class="als-grid"><label class="als-field">编辑风格<select class="text_pole als-style als-prompt-style"><option value="traditional">传统详述</option><option value="memory">结构记忆</option><option value="chronicle">纪实详述 @KKM</option></select></label><label class="als-field">编辑模式<select class="text_pole als-mode als-prompt-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option><option value="compress">压缩总结</option></select></label></div>
             <p class="als-prompt-context als-help"></p></div></details><small class="als-prompt-usage" role="status"></small>
             <label class="als-prompt-label"><span class="als-editor-heading">总结指令 <span class="als-prompt-length"></span></span><textarea class="text_pole als-prompt" rows="15" spellcheck="false" aria-label="大总结提示词"></textarea></label>
             <details class="als-disclosure als-prompt-help"><summary><span>编辑提示</span></summary><p class="als-help">传统详述按事件记因果，按需补充角色表。结构记忆按需记录转折、关系、约定、知情范围和接续状态。{{user}} 等宏会在发送时展开。此处切换只改变编辑对象；“保存并使用此模板”会同时启用对应风格和模式。“保存修改”仅更新编辑中的模板；两种保存都保留其他草稿。恢复默认只影响正在编辑的一份模板，保存后生效。</p><button type="button" class="als-text-button als-prompt-reset">回到默认提示词</button></details>
