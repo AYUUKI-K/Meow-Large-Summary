@@ -1149,6 +1149,11 @@ function getSettings() {
     context.extensionSettings[MODULE_NAME] ??= {};
     settings = context.extensionSettings[MODULE_NAME];
     const previousPrompt = settings.prompt;
+    // 1.6.0 把默认风格改成 MoM 大总结。早于「风格」这个设置的老用户没存过 promptStyle，
+    // 他们的模板在传统详述里，补默认值时要留在传统详述，不能被换掉。
+    if (settings.promptStyle === undefined && (settings.prompts !== undefined || typeof settings.prompt === 'string')) {
+        settings.promptStyle = 'traditional';
+    }
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
         if (settings[key] === undefined) {
             settings[key] = structuredClone(value);
@@ -1178,7 +1183,7 @@ function getSettings() {
     for (const key of ['memoryPrompts', 'chroniclePrompts']) {
         if (!settings[key] || typeof settings[key] !== 'object' || Array.isArray(settings[key])) settings[key] = {};
     }
-    if (!['safe', 'context', 'custom'].includes(settings.inputCap)) settings.inputCap = 'safe';
+    if (!['context', 'seg60k', 'safe', 'custom'].includes(settings.inputCap)) settings.inputCap = DEFAULT_SETTINGS.inputCap;
     settings.inputCapTokens = Math.max(4000, Math.floor(Number(settings.inputCapTokens) || DEFAULT_SETTINGS.inputCapTokens));
     settings.compressTarget = Math.max(500, Math.floor(Number(settings.compressTarget) || DEFAULT_SETTINGS.compressTarget));
     for (const style of Object.keys(PROMPT_STYLE_LABELS)) {
@@ -2132,13 +2137,17 @@ async function waitForCurrentGeneration(context, expectedChatId) {
     return false;
 }
 
-// 单次总结能塞多少原文。safe 是 1.5.0 的行为：自定义渠道报的上限可能不准，封顶 24000。
-// context / custom 给长上下文模型（如 Gemini）用，一次就能总结完，少用调用次数。
+// 单次总结能塞多少原文，超过就分段、每段调用一次模型。所有档位都不超过主连接上限的 70%。
+// context（默认）：一次总结完；读不到主连接上限时按 60000 算。
+// seg60k / safe：分段，每段最多 60000 / 24000（safe 就是 1.5.0 的行为，给上下文报得不准的自定义渠道用）。
+// custom：用户填的 token 数。
 function summaryInputBudget(hostBudget) {
-    const ceiling = Math.floor((hostBudget ?? 48000) * 0.7);
-    if (settings.inputCap === 'context' && Number.isFinite(hostBudget)) return ceiling;
-    if (settings.inputCap === 'custom') return Math.min(ceiling, settings.inputCapTokens);
-    return Math.min(24000, ceiling);
+    const known = Number.isFinite(hostBudget) && hostBudget > 0;
+    const ceiling = known ? Math.floor(hostBudget * 0.7) : null;
+    if (settings.inputCap === 'safe') return Math.min(24000, Math.floor((known ? hostBudget : 48000) * 0.7));
+    if (settings.inputCap === 'seg60k') return Math.min(60000, ceiling ?? 60000);
+    if (settings.inputCap === 'custom') return Math.min(settings.inputCapTokens, ceiling ?? settings.inputCapTokens);
+    return ceiling ?? 60000;
 }
 
 async function countSummaryTokens(context, text) {
@@ -3217,7 +3226,7 @@ function syncPromptEditor() {
         : '把旧总结和新剧情整理到一起喵，用新全文替换原条目，历史记录仍会留着。';
     setUiText('.als-style-description', {
         memory: '按因果、关系、约定、知情范围和接续状态分类，方便查找仍有效的记忆。',
-        chronicle: '按时间线流水账记事，附主要角色、伏笔人物、伏笔清单和重要记忆锚点；不重复记人设和档案。',
+        chronicle: '按时间线流水账记事，附主要角色、伏笔人物、伏笔清单和重要记忆锚点；不重复记人设和档案。@KKM 定稿。',
     }[settingsDraft.promptStyle] ?? '按关键转折记下起因与结果，必要时附角色表。');
     ui.querySelector('.als-prompt-state').textContent = draft === savedEditorPrompt() ? '提示词已经记住喵' : '还没保存喵';
     setUiText('.als-prompt-context', `当前运行：${PROMPT_STYLE_LABELS[settings.promptStyle]} · ${MODE_LABELS[settings.mode]}。正在编辑：${PROMPT_STYLE_LABELS[promptEditorStyle]} · ${TEMPLATE_LABELS[promptEditorMode]}。`);

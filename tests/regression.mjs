@@ -557,6 +557,13 @@ test('input budget warning follows connection capacity without modifying thresho
     assert.equal(f.api.evaluate('budgetWarning'), '');
 });
 
+// 1.6.0 改了新装默认值（MoM 大总结、一次总结、压缩 10000）。旧测试按 1.5.0 的默认写成，
+// 夹具默认模拟「已经在用的老用户」；测新装默认值时传 { __fresh: true }。
+function legacyDefaults(savedSettings) {
+    if (savedSettings?.__fresh) { const { __fresh, ...rest } = savedSettings; return rest; }
+    return { promptStyle: 'traditional', inputCap: 'safe', compressTarget: 5000, ...savedSettings };
+}
+
 async function fixture(savedSettings = {}, storageData = new Map(), extensionFolder = 'Meow-Large-Summary') {
     const integrationEvents = [];
     const notices = [];
@@ -581,7 +588,7 @@ async function fixture(savedSettings = {}, storageData = new Map(), extensionFol
         chatId: 'chat-a', characterId: 0, groupId: null,
         characters: [{ name: '角色 A', avatar: 'a.png', chat: 'chat-a' }],
         chat: Array.from({ length: 30 }, (_, i) => ({ mes: `楼层 ${i}`, name: i % 2 ? '角色 A' : '用户', is_user: !(i % 2), is_system: false })),
-        chatMetadata: {}, extensionSettings: { auto_large_summary: structuredClone(savedSettings) },
+        chatMetadata: {}, extensionSettings: { auto_large_summary: structuredClone(legacyDefaults(savedSettings)) },
         eventTypes: { APP_READY: 'app-ready', SETTINGS_UPDATED: 'settings-updated', WORLDINFO_SCAN_DONE: 'worldinfo-scan-done',
             CHAT_COMPLETION_PROMPT_READY: 'prompt-ready', GENERATE_AFTER_DATA: 'after-data' },
         eventSource: {
@@ -3895,24 +3902,43 @@ test('silent native model requests time out, release controls and retain a retry
     assert.match(f.controls.get('.als-status').textContent, /5 分钟/);
 });
 
-// ── 1.6.0：单次输入上限、压缩总结、纪实详述风格、单次模板 ──
+// ── 1.6.0：单次输入上限、压缩总结、MoM 大总结风格、单次模板 ──
 
-test('input cap: safe keeps the 1.5.0 budget, context and custom lift the 24000 ceiling but never exceed 70%', async () => {
+test('input cap: one-shot by default, 60000 / 24000 segment tiers, custom, never above 70% of the host', async () => {
     const f = await fixture();
     const budget = (cap, host, tokens = 100000) => f.api.evaluate(`settings.inputCap = '${cap}'; settings.inputCapTokens = ${tokens}; summaryInputBudget(${host})`);
-    assert.equal(budget('safe', 1000000), 24000);
-    assert.equal(budget('safe', 20000), 14000);
     assert.equal(budget('context', 1000000), 700000);
-    assert.equal(budget('context', null), 24000, 'unknown host capacity falls back to the safe budget');
+    assert.equal(budget('context', null), 60000, 'unknown host capacity uses 60000');
+    assert.equal(budget('seg60k', 1000000), 60000);
+    assert.equal(budget('seg60k', 50000), 35000);
+    assert.equal(budget('safe', 1000000), 24000, 'safe keeps the 1.5.0 budget');
+    assert.equal(budget('safe', 20000), 14000);
+    assert.equal(budget('safe', null), 24000);
     assert.equal(budget('custom', 1000000, 100000), 100000);
     assert.equal(budget('custom', 50000, 100000), 35000);
+});
+
+test('fresh installs default to MoM style, one-shot summaries and a 10000-token compression target', async () => {
+    const f = await fixture({ __fresh: true });
+    const s = f.api.state().settings;
+    assert.equal(s.promptStyle, 'chronicle');
+    assert.equal(s.inputCap, 'context');
+    assert.equal(s.compressTarget, 10000);
+    assert.equal(s.prompt, defaultPrompt('chronicle', 'incremental'));
+});
+
+test('users from before prompt styles keep their saved template in the traditional style', async () => {
+    const f = await fixture({ __fresh: true, prompt: '老用户自己的模板' });
+    const s = f.api.state().settings;
+    assert.equal(s.promptStyle, 'traditional');
+    assert.equal(s.prompt, '老用户自己的模板');
 });
 
 test('settings normalization fills new templates and fields without touching saved custom prompts', async () => {
     const f = await fixture({ inputCap: 'huge', compressTarget: 'x', prompts: { incremental: '传统新增', merged: '传统合并' } });
     const s = f.api.state().settings;
-    assert.equal(s.inputCap, 'safe');
-    assert.equal(s.compressTarget, 5000);
+    assert.equal(s.inputCap, 'context');
+    assert.equal(s.compressTarget, 10000);
     assert.equal(s.prompts.incremental, '传统新增');
     assert.equal(s.prompts.merged, '传统合并');
     for (const style of ['traditional', 'memory', 'chronicle']) {
