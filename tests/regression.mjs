@@ -3927,11 +3927,14 @@ test('fresh installs default to MoM style, one-shot summaries and a 10000-token 
     assert.equal(s.prompt, defaultPrompt('chronicle', 'incremental'));
 });
 
-test('users from before prompt styles keep their saved template in the traditional style', async () => {
+test('missing styles default to MoM and keep old custom text in the traditional template slot', async () => {
     const f = await fixture({ __fresh: true, prompt: '老用户自己的模板' });
     const s = f.api.state().settings;
-    assert.equal(s.promptStyle, 'traditional');
-    assert.equal(s.prompt, '老用户自己的模板');
+    assert.equal(s.promptStyle, 'chronicle');
+    assert.equal(s.prompt, defaultPrompt('chronicle', 'incremental'));
+    assert.equal(s.prompts.incremental, '老用户自己的模板');
+    const saved = await fixture({ promptStyle: 'traditional', prompts: { incremental: '已选风格的模板' } });
+    assert.equal(saved.api.state().settings.prompt, '已选风格的模板');
 });
 
 test('settings normalization fills new templates and fields without touching saved custom prompts', async () => {

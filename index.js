@@ -1149,11 +1149,6 @@ function getSettings() {
     context.extensionSettings[MODULE_NAME] ??= {};
     settings = context.extensionSettings[MODULE_NAME];
     const previousPrompt = settings.prompt;
-    // 1.6.0 把默认风格改成 MoM 大总结。早于「风格」这个设置的老用户没存过 promptStyle，
-    // 他们的模板在传统详述里，补默认值时要留在传统详述，不能被换掉。
-    if (settings.promptStyle === undefined && (settings.prompts !== undefined || typeof settings.prompt === 'string')) {
-        settings.promptStyle = 'traditional';
-    }
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
         if (settings[key] === undefined) {
             settings[key] = structuredClone(value);
@@ -1168,7 +1163,7 @@ function getSettings() {
     }
     if (!Array.isArray(settings.secondaryModels)) settings.secondaryModels = [];
     if (!Object.hasOwn(MODE_LABELS, settings.mode)) settings.mode = 'incremental';
-    if (!Object.hasOwn(PROMPT_STYLE_LABELS, settings.promptStyle)) settings.promptStyle = 'traditional';
+    if (!Object.hasOwn(PROMPT_STYLE_LABELS, settings.promptStyle)) settings.promptStyle = DEFAULT_SETTINGS.promptStyle;
     if (!Object.hasOwn(INSTRUCTION_POSITIONS, settings.instructionPosition)) settings.instructionPosition = 'tail';
     settings.instructionDepth = Math.min(10000, Math.max(0, Math.floor(Number(settings.instructionDepth) || 0)));
     if (![0, 1, 2].includes(settings.instructionRole)) settings.instructionRole = 0;
@@ -3464,7 +3459,7 @@ function syncActionState() {
     if (progressNote) {
         progressNote.hidden = !job || Boolean(activeRun);
         progressNote.textContent = job?.invalid ? '本地进度无法读取，请放弃进度后重新总结。'
-            : job?.result ? '正文已生成，继续时会重试保存，不再调用模型。'
+            : job?.result ? (job.operation === 'compress' ? '继续时会从最近一版压缩结果接着处理。' : '正文已生成，继续时会重试保存，不再调用模型。')
                 : job ? `已完成 ${job.steps.length} 次生成${job.total ? `，原文共 ${job.total} 段` : ''}，继续时只处理未完成部分。` : '';
         if (job?.storageError) progressNote.textContent += ' 浏览器存储失败，进度仅保留在本页；刷新前请导出草稿。';
     }
@@ -3491,12 +3486,24 @@ function syncActionState() {
     if (deleteDraft) deleteDraft.disabled = Boolean(sendLockDepth);
     const retryDraft = ui.querySelector('.als-incomplete-retry');
     if (retryDraft) { retryDraft.hidden = !incomplete?.storageError; retryDraft.disabled = Boolean(sendLockDepth); }
-    const busy = !settings.enabled || Boolean(sendLockDepth) || !getCharacterAndChat(context);
+    const current = getCharacterAndChat(context);
+    const busy = !settings.enabled || Boolean(sendLockDepth) || !current;
+    const hasMemory = Boolean(entry?.content?.trim());
+    const compressReason = !settings.enabled ? '请先启用插件。'
+        : !current ? '请先打开单人聊天。'
+        : sendLockDepth ? '当前正在处理总结，请稍候。'
+        : archive?.pendingSummarySave ? '请先刷新世界书，确认上次写入结果。'
+        : job ? '请先继续或放弃未完成的总结。'
+        : needsRebuild ? '请先处理原文变化，再压缩记忆。'
+        : !hasMemory ? '当前聊天还没有已保存的总结。' : '';
+    setUiText('.als-compress-reason', compressReason);
+    setUiHidden('.als-compress-reason', !compressReason);
     const controls = {
         '.als-resume': busy || !job || job.invalid || Boolean(archive?.pendingSummarySave),
         '.als-run': busy || needsRebuild || !scope.range,
-        '.als-compact': busy || Boolean(job) || !entry?.content?.trim() || needsRebuild,
-        '.als-compress': busy || Boolean(job) || !entry?.content?.trim() || needsRebuild,
+        '.als-compact': busy || Boolean(job) || !hasMemory || needsRebuild,
+        '.als-compress': Boolean(sendLockDepth),
+        '.als-compress-confirm': Boolean(compressReason),
         '.als-rebuild': busy || !(needsRebuild || retained),
         '.als-retain-memory': busy || !archive?.sourceChanged || !entry?.content?.trim()
             || Boolean(archive.pendingSummarySave || journal?.phase === 'saved' || (journal?.combinedRestorePending && !journal.messagesRestored)),
@@ -3522,8 +3529,7 @@ function syncActionState() {
     setUiHidden('.als-undo-restore', !journal || journal.phase === 'undone');
     setUiHidden('.als-recovery', !journal);
     setUiHidden('.als-retry-hide', journal?.phase !== 'saved' || Boolean(journal?.messagesRestored));
-    setUiHidden('.als-compact', !entry?.content?.trim());
-    setUiHidden('.als-compress', !entry?.content?.trim());
+    setUiHidden('.als-compact', !hasMemory);
     const rebuild = ui.querySelector('.als-rebuild');
     if (rebuild) {
         rebuild.hidden = !(needsRebuild || retained);
@@ -3537,7 +3543,6 @@ function syncActionState() {
     }
     const retain = ui.querySelector('.als-retain-memory');
     if (retain) retain.hidden = !archive?.sourceChanged || !entry?.content?.trim();
-    const current = getCharacterAndChat(context);
     const total = scope.hiddenCount + scope.pendingCount + scope.keptCount;
     const autoState = automaticStatus(settings, archive, journal, { hasChat: Boolean(current), busy: Boolean(sendLockDepth),
         hasWork: Boolean(scope.range), chatLength: context?.chat?.length ?? 0 });
@@ -3563,7 +3568,7 @@ function syncActionState() {
         : archive?.pendingContinuation ? `接续记忆尚未写入，请检查世界书“${archive.pendingContinuation.bookName}”并刷新。`
         : archive?.pendingSummarySave ? '上次写入结果尚未确认，请先刷新世界书状态。'
         : journal?.combinedRestorePending && !journal.messagesRestored ? '总结已撤销，原文尚未全部恢复。继续恢复不会再次撤销或重新生成。'
-        : job && !job.invalid ? `本次处理至第 ${job.sourceEnd} 层；停止后新增的消息留给下一次总结。`
+        : job && !job.invalid ? (job.operation === 'compress' ? '继续压缩本次已保存的总结。' : `本次处理至第 ${job.sourceEnd} 层；停止后新增的消息留给下一次总结。`)
         : archive?.sourceChanged ? '原文已改变，请选择更新记忆或保留现有总结。确认前暂停自动总结，仍可继续聊天。'
         : archive?.coverageBlocked ? '上次未能核实总结用到的聊天原文。检查聊天历史、上下文长度和会改写请求的扩展后，可手动重试。' + (entry ? '点「查看完整记忆」可核对手改正文。' : '')
         : archive?.branch?.needsRebuild ? '部分旧总结无法确认属于当前分支。可从有效旧总结更新记忆，或到世界书中手动处理。'
@@ -3577,11 +3582,10 @@ function syncActionState() {
     const suggested = archive?.pendingContinuation ? ['.als-book-check', '重试导入总结']
         : archive?.pendingSummarySave ? ['.als-book-check', '确认上次操作结果']
         : journal?.combinedRestorePending && !journal.messagesRestored ? ['.als-undo-restore', '继续恢复本次原文']
-        : job ? ['.als-resume', job.result ? '重试保存（不重新生成）' : '继续总结']
+        : job ? ['.als-resume', job.operation === 'compress' ? '继续压缩' : job.result ? '重试保存（不重新生成）' : '继续总结']
         : needsRebuild ? ['.als-rebuild', '更新记忆（从有效总结接续）']
         : journal?.phase === 'saved' && !journal.messagesRestored && journal.hideEnd >= 0 ? ['.als-retry-hide', '只重试隐藏（不重新生成）']
         : !scope.range && entry?.content?.trim() ? ['.als-view-current', '查看完整记忆'] : null;
-    const hasMemory = Boolean(entry?.content?.trim());
     const reading = suggested?.[0] === '.als-view-current' && !activeRun && !archive?.pendingSummarySave;
     const lastRecord = entry ? activeRecords(archiveRecords(entry)).at(-1) : null;
     setUiHidden('.als-scope', !scope.range || Boolean(suggested && !archive?.coverageBlocked));
@@ -3882,7 +3886,48 @@ async function renderSettings() {
     bindInput('.als-keep', 'keepRecent', value => Math.max(1, Math.floor(Number(value) || DEFAULT_SETTINGS.keepRecent)));
     bindInput('.als-book', 'worldBookName', value => String(value).trim());
     bindInput('.als-depth', 'depth', value => Math.max(0, Math.floor(Number(value) || 0)));
-    bindInput('.als-settings-mode', 'mode', String);
+    const modeSelect = ui.querySelector('.als-settings-mode');
+    const compressionDialog = ui.querySelector('.als-compress-dialog');
+    const compressionInput = ui.querySelector('.als-compress-once-target');
+    const compressionConfirm = ui.querySelector('.als-compress-confirm');
+    let compressionChat = null;
+    const openCompression = () => {
+        if (sendLockDepth || compressionDialog.open) return;
+        compressionChat = getCharacterAndChat(getContext());
+        compressionInput.value = settings.compressTarget;
+        syncActionState();
+        compressionDialog.showModal();
+    };
+    modeSelect.addEventListener('change', () => {
+        if (modeSelect.value === 'compress') {
+            modeSelect.value = settingsDraft.mode;
+            openCompression();
+            return;
+        }
+        settingsDraft.mode = modeSelect.value;
+        syncPromptEditor();
+        syncSettingsState();
+    });
+    compressionDialog.addEventListener('keydown', event => {
+        if (event.key === 'Escape') event.stopPropagation();
+    });
+    ui.querySelector('.als-compress-cancel').addEventListener('click', () => compressionDialog.close());
+    ui.querySelector('.als-compress-form').addEventListener('submit', event => {
+        event.preventDefault();
+        if (!compressionDialog.open) return;
+        const current = getCharacterAndChat(getContext());
+        if (current?.chatId !== compressionChat?.chatId || current?.cardKey !== compressionChat?.cardKey) {
+            compressionDialog.close();
+            notify('info', '聊天已切换，请重新选择压缩大总结。');
+            return;
+        }
+        syncActionState();
+        const target = compressionInput.valueAsNumber;
+        if (compressionConfirm.disabled || !Number.isSafeInteger(target) || target < 500) return;
+        compressionDialog.close();
+        showTab('overview');
+        void runLargeSummary({ operation: 'compress', compressTarget: target });
+    });
     bindInput('.als-settings-style', 'promptStyle', String);
     bindInput('.als-api-mode', 'apiMode', String);
     bindInput('.als-secondary-url', 'secondaryUrl', value => String(value).trim());
@@ -3986,7 +4031,7 @@ async function renderSettings() {
     });
     ui.querySelector('.als-run').addEventListener('click', () => runLargeSummary({ manual: true }));
     ui.querySelector('.als-compact').addEventListener('click', () => runLargeSummary({ operation: 'compact' }));
-    ui.querySelector('.als-compress').addEventListener('click', () => runLargeSummary({ operation: 'compress' }));
+    ui.querySelector('.als-compress').addEventListener('click', openCompression);
     ui.querySelector('.als-rebuild').addEventListener('click', () => {
         if (window.confirm('检查仍有效的旧总结，只整理它之后的原文来更新记忆？没有有效旧总结时会停止，不会全量重跑历史。成功后替换当前记忆，历史保留，并按设置隐藏一次旧消息。')) {
             void runLargeSummary({ operation: 'rebuild' });

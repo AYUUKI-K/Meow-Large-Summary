@@ -92,6 +92,21 @@
 @keyframes als-turn { to { transform: rotate(360deg); } }
 .als-panel { display: flex; flex-direction: column; min-width: 0; gap: 20px; padding-top: 12px; }
 .als-overview { display: flex; flex-direction: column; gap: 12px; padding: 8px 2px 0; }
+.als-settings .als-compress-dialog {
+    width: min(420px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    box-sizing: border-box;
+    margin: auto;
+    padding: 18px;
+    border: 1px solid var(--als-control-line);
+    border-radius: var(--als-radius-page);
+    color: var(--als-ink);
+    background: color-mix(in srgb, var(--als-paper), Canvas 20%);
+    box-shadow: 0 12px 36px #0006;
+}
+.als-compress-dialog::backdrop { background: #0008; }
+.als-compress-form { display: grid; gap: 12px; }
+.als-compress-form :is(h3, p) { margin: 0; }
 .als-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .als-eyebrow { color: var(--als-ink-muted); font-size: 11px; letter-spacing: .08em; }
 .als-state-badge { padding: 3px 8px; border-radius: 4px; background: var(--als-bookmark-wash); font-size: 11px; font-weight: 500; }

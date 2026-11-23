@@ -68,6 +68,12 @@ export function settingsMarkup(version) {
               <button type="button" class="als-text-button als-view-current">查看完整记忆 ${uiIcon('arrow')}</button>
               <button type="button" class="als-text-button als-undo-restore" title="恢复整理前的记忆与本轮隐藏的原文" hidden>撤销本次整理</button>
             </div>
+            <div class="als-actions" role="group" aria-label="总结操作">
+              <button type="button" class="menu_button als-compress">压缩大总结</button>
+              <button type="button" class="menu_button als-compact" hidden>仅合并已有总结</button>
+              <button type="button" class="menu_button als-carry-current" hidden>带总结开新聊天</button>
+              <button type="button" class="menu_button als-choose-import" hidden>从旧档导入总结</button>
+            </div>
             <div class="als-empty-memory" hidden>上次记忆<span>还没有总结记录</span></div>
             <details class="als-incomplete-result als-disclosure" hidden><summary>未完成的总结草稿</summary><div class="als-disclosure-body"><p class="als-incomplete-reason als-help"></p><p class="als-draft-state als-help" role="status"></p><textarea class="text_pole als-incomplete-text" rows="8" readonly aria-label="未完成的总结正文"></textarea><div class="als-actions"><button type="button" class="menu_button als-incomplete-copy">复制未完成结果</button><button type="button" class="menu_button als-incomplete-download">下载未完成正文</button><button type="button" class="menu_button als-incomplete-retry" hidden>重试本地存储</button><button type="button" class="als-text-button als-incomplete-delete">删除这份草稿</button></div></div></details>
             <details class="als-disclosure als-chat-details"><summary>整理详情与工具</summary><div class="als-disclosure-body">
@@ -77,10 +83,6 @@ export function settingsMarkup(version) {
               <div class="als-runtime"><span class="als-runtime-style"></span><span class="als-runtime-mode"></span><span class="als-runtime-api"></span></div>
               <p class="als-auto-status als-help"></p><p class="als-token-comparison als-help"></p><p class="als-last-operation als-muted"></p>
               <div class="als-book-state"><span class="als-book-status als-muted">正在读取世界书状态…</span><button type="button" class="als-icon-button als-book-check" aria-label="刷新世界书状态" title="刷新世界书状态">${uiIcon('refresh')}</button></div>
-              <button type="button" class="menu_button als-compact">仅合并已有总结</button>
-              <button type="button" class="menu_button als-compress" title="把这个聊天的总结压到设置里的目标 token 以内，不读新剧情、不改消息可见状态">压缩总结</button>
-              <button type="button" class="menu_button als-carry-current" disabled>带总结开新聊天</button>
-              <button type="button" class="menu_button als-choose-import" hidden>从旧档导入总结</button>
             <details class="als-recovery als-disclosure"><summary>${uiIcon('undo')}<span>恢复与撤销</span><span class="als-disclosure-note">最近一次操作</span></summary>
               <p class="als-help">可以单独恢复本轮原文，或撤销最近一次记忆。</p>
               <div class="als-recovery-actions">
@@ -95,20 +97,22 @@ export function settingsMarkup(version) {
 
           <div class="als-panel" id="als-panel-settings" data-panel="settings" role="region" aria-label="总结设置" hidden>
             <div class="als-section-heading"><h3 tabindex="-1" class="als-settings-title">总结设置</h3><label class="als-switch als-master"><span>启用</span><input class="als-enabled" type="checkbox" aria-label="启用插件"><span class="als-switch-track" aria-hidden="true"></span></label></div>
+            <section class="als-form-section"><h4>总结方式</h4>
+              <div class="als-grid"><label class="als-field">总结风格<select class="text_pole als-style als-settings-style"><option value="chronicle">MoM 大总结</option><option value="traditional">传统详述</option><option value="memory">结构记忆</option></select></label><label class="als-field">运行模式<select class="text_pole als-mode als-settings-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option><option value="compress">压缩大总结（单次）</option></select></label></div>
+              <p class="als-style-description als-help"></p><p class="als-mode-description als-help"></p>
+              <button type="button" class="als-text-button als-custom-template">自定义提示词 ${uiIcon('arrow')}</button>
+            </section>
             <section class="als-form-section"><h4>自动与保留</h4>
               <label class="als-switch als-switch-row"><span><strong>自动总结</strong><small>达到阈值时自动整理；关闭后仍可手动总结。</small></span><input class="als-auto-enabled" type="checkbox" aria-label="自动总结"><span class="als-switch-track" aria-hidden="true"></span></label>
               <div class="als-grid"><label class="als-field">触发 token 数<input class="text_pole als-threshold" type="number" min="1" step="1000"></label><label class="als-field">保留最近消息条数<input class="text_pole als-keep" type="number" min="1" step="1"></label></div>
               <small class="als-keep-help als-help">20 条消息通常约为 10 轮问答；保留数量只决定隐藏边界。</small>
               <p class="als-help als-budget-warning" role="status" hidden></p>
             </section>
-            <section class="als-form-section"><h4>总结方式</h4>
-              <div class="als-grid"><label class="als-field">总结风格<select class="text_pole als-style als-settings-style"><option value="traditional">传统详述</option><option value="memory">结构记忆</option><option value="chronicle">MoM 大总结</option></select></label><label class="als-field">运行模式<select class="text_pole als-mode als-settings-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option></select></label></div>
-              <p class="als-style-description als-help"></p><p class="als-mode-description als-help"></p>
+            <section class="als-form-section"><h4>Token 额度</h4>
               <div class="als-grid"><label class="als-field">单次输入上限<select class="text_pole als-input-cap"><option value="context">一次总结（默认）</option><option value="seg60k">分段 · 每段 6 万</option><option value="safe">分段 · 每段 2.4 万</option><option value="custom">自定义</option></select></label><label class="als-field als-input-cap-tokens-field" hidden>自定义上限 token<input class="text_pole als-input-cap-tokens" type="number" min="4000" step="1000"></label></div>
               <p class="als-help">默认一次发送、一次总结完，最省调用次数。原文超过上限时才会分段，每段调用一次模型：主连接上下文较小、或自定义渠道报的上下文不准时，选分段档。无论哪档，都不超过主连接上限的 70%。</p>
-              <label class="als-field">压缩目标 token<input class="text_pole als-compress-target" type="number" min="500" step="500"></label>
-              <p class="als-help">「压缩总结」把这个聊天的总结压到这个长度以内；压完会数一遍，超了再压，最多 3 轮。</p>
-              <button type="button" class="als-text-button als-custom-template">自定义提示词 ${uiIcon('arrow')}</button>
+              <label class="als-field">常用压缩目标 token<input class="text_pole als-compress-target" type="number" min="500" step="1"></label>
+              <p class="als-help">压缩弹窗会预填这个数，开始前可为本次调整。</p>
             </section>
             <section class="als-form-section"><h4>API 与模型</h4><label class="als-field">总结使用的 API<select class="text_pole als-api-mode"><option value="main">主 API · 跟随当前酒馆连接</option><option value="secondary">副 API · OpenAI 兼容接口</option></select></label>
               <label class="als-switch als-switch-row"><span><strong>流式接收总结</strong><small>显示实时进度与正文。仅影响总结；接口不支持时可关闭。</small></span><input class="als-stream-summary" type="checkbox" aria-label="流式接收总结"><span class="als-switch-track" aria-hidden="true"></span></label>
@@ -141,7 +145,7 @@ export function settingsMarkup(version) {
              <button type="button" class="als-text-button als-back-settings">${uiIcon('back')} 返回设置</button><h3>自定义提示词</h3>
             <details class="als-disclosure als-template-options"><summary>选择其他模板</summary><div class="als-disclosure-body">
               <div class="als-running-template"><span class="als-eyebrow">实际运行模板</span><strong class="als-running-template-name"></strong><button type="button" class="als-text-button als-edit-running">编辑当前运行模板</button></div>
-            <div class="als-grid"><label class="als-field">编辑风格<select class="text_pole als-style als-prompt-style"><option value="traditional">传统详述</option><option value="memory">结构记忆</option><option value="chronicle">MoM 大总结</option></select></label><label class="als-field">编辑模式<select class="text_pole als-mode als-prompt-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option><option value="compress">压缩总结</option></select></label></div>
+            <div class="als-grid"><label class="als-field">编辑风格<select class="text_pole als-style als-prompt-style"><option value="chronicle">MoM 大总结</option><option value="traditional">传统详述</option><option value="memory">结构记忆</option></select></label><label class="als-field">编辑模式<select class="text_pole als-mode als-prompt-mode"><option value="incremental">追加新增</option><option value="merged">合并全文</option><option value="compress">压缩大总结</option></select></label></div>
             <p class="als-prompt-context als-help"></p></div></details><small class="als-prompt-usage" role="status"></small>
             <label class="als-prompt-label"><span class="als-editor-heading">总结指令 <span class="als-prompt-length"></span></span><textarea class="text_pole als-prompt" rows="15" spellcheck="false" aria-label="大总结提示词"></textarea></label>
             <details class="als-disclosure als-prompt-help"><summary><span>编辑提示</span></summary><p class="als-help">传统详述按事件记因果，按需补充角色表。结构记忆按需记录转折、关系、约定、知情范围和接续状态。{{user}} 等宏会在发送时展开。此处切换只改变编辑对象；“保存并使用此模板”会同时启用对应风格和模式。“保存修改”仅更新编辑中的模板；两种保存都保留其他草稿。恢复默认只影响正在编辑的一份模板，保存后生效。</p><button type="button" class="als-text-button als-prompt-reset">回到默认提示词</button></details>
@@ -166,6 +170,16 @@ export function settingsMarkup(version) {
             </div>
           </div>
 
+          <dialog class="als-compress-dialog" aria-labelledby="als-compress-title" aria-describedby="als-compress-description">
+            <form class="als-compress-form" method="dialog">
+              <h3 id="als-compress-title">压缩大总结</h3>
+              <p class="als-help" id="als-compress-description">只压缩当前聊天已保存的总结，楼层的显示和隐藏保持原样。保存后可以撤销。</p>
+              <label class="als-field">本次目标长度（token）<input class="text_pole als-compress-once-target" type="number" min="500" max="9007199254740991" step="1" required autofocus aria-describedby="als-compress-help"></label>
+              <p class="als-help" id="als-compress-help">最少 500 token，数越小，保留的细节越少。超标时最多再压两轮，仍超标会保留最后一版并提示。</p>
+              <p class="als-help als-compress-reason" role="status" hidden></p>
+              <div class="als-actions"><button type="button" class="menu_button als-compress-cancel">取消</button><button type="submit" class="menu_button als-primary als-compress-confirm">开始压缩</button></div>
+            </form>
+          </dialog>
         </div>
       </div>`;
 }
