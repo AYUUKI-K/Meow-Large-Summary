@@ -3226,7 +3226,7 @@ function syncPromptEditor() {
         : '把旧总结和新剧情整理到一起喵，用新全文替换原条目，历史记录仍会留着。';
     setUiText('.als-style-description', {
         memory: '按因果、关系、约定、知情范围和接续状态分类，方便查找仍有效的记忆。',
-        chronicle: '按时间线流水账记事，附主要角色、伏笔人物、伏笔清单和重要记忆锚点；不重复记人设和档案。@KKM 定稿。',
+        chronicle: '按时间线流水账记事，附主要角色、伏笔人物、伏笔清单和重要记忆锚点；不重复记人设和档案。',
     }[settingsDraft.promptStyle] ?? '按关键转折记下起因与结果，必要时附角色表。');
     ui.querySelector('.als-prompt-state').textContent = draft === savedEditorPrompt() ? '提示词已经记住喵' : '还没保存喵';
     setUiText('.als-prompt-context', `当前运行：${PROMPT_STYLE_LABELS[settings.promptStyle]} · ${MODE_LABELS[settings.mode]}。正在编辑：${PROMPT_STYLE_LABELS[promptEditorStyle]} · ${TEMPLATE_LABELS[promptEditorMode]}。`);

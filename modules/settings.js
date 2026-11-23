@@ -2,7 +2,7 @@ import { LEGACY_DEFAULT_PROMPT, PREVIOUS_DEFAULT_PROMPT, PREVIOUS_DEFAULT_MERGED
 
 export { LEGACY_DEFAULT_PROMPT };
 
-export const PROMPT_STYLE_LABELS = Object.freeze({ traditional: '传统详述', memory: '结构记忆', chronicle: 'MoM 大总结 @KKM' });
+export const PROMPT_STYLE_LABELS = Object.freeze({ traditional: '传统详述', memory: '结构记忆', chronicle: 'MoM 大总结' });
 // 编辑器里多一个「压缩」；运行模式仍只有新增 / 合并两种。
 export const TEMPLATE_MODES = Object.freeze(['incremental', 'merged', 'compress']);
 
@@ -25,8 +25,8 @@ function structuredMemoryFormat(label) {
 - 接续状态：在何处、谁持有关键物品、什么动作尚未完成。只补接戏必需的信息。`;
 }
 
-// MoM 大总结（@KKM）：按时间线记事件，另附主要角色、伏笔人物、伏笔清单与重要记忆锚点。
-// 原文由 @KKM 定稿；改动请保持三份结构一致。
+// MoM 大总结：按时间线记事件，另附主要角色、伏笔人物、伏笔清单与重要记忆锚点。融合了多份社区大总结提示词。
+// 改动请保持新增 / 合并 / 压缩三份结构一致。
 export const CHRONICLE_MERGED_PROMPT = `停止剧情，暂停其他所有输出规则，开始执行**全文大总结**。必须客观、纪实，专注总结任务。
 
 【核心要求】
