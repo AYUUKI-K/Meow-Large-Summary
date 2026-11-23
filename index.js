@@ -13,6 +13,7 @@ import { tauriPromptPreview } from './modules/tauri-prompt-preview.js';
 import { completionFailure, promptContainsText, summaryOutputFailure } from './modules/generation-validation.js';
 import { buildSummaryMessages, buildSummaryTextPrompt, SUMMARY_TASK_INSTRUCTION } from './modules/summary-prompt.js';
 import { readSummaryStream, summaryResponseError, supportsSummaryStream } from './modules/summary-stream.js';
+import { applyGeminiShield, collectGoogleStream, readWholeBody, unwrapShieldOutput } from './modules/gemini-shield.js';
 import { downloadText } from './modules/text-export.js';
 import { createIncompleteDraftStore } from './modules/incomplete-drafts.js';
 import { createSummaryJobStore, generateSummaryJob, summaryConnectionSignature } from './modules/summary-job.js';
@@ -90,7 +91,7 @@ const loadedIncompleteDrafts = new Set();
 const draftSaveTimers = new Map();
 const summaryJobs = new Map();
 const summaryJobStore = createSummaryJobStore();
-const SETTING_FIELDS = ['enabled', 'autoEnabled', 'streamSummary', 'threshold', 'keepRecent', 'worldBookName', 'depth', 'mode', 'promptStyle', 'instructionPosition', 'instructionDepth', 'instructionRole', 'apiMode', 'secondaryUrl', 'secondaryKey', 'secondaryModel', 'secondaryModels', 'inputCap', 'inputCapTokens', 'compressTarget'];
+const SETTING_FIELDS = ['enabled', 'autoEnabled', 'streamSummary', 'geminiShieldInput', 'geminiShieldOutput', 'threshold', 'keepRecent', 'worldBookName', 'depth', 'mode', 'promptStyle', 'instructionPosition', 'instructionDepth', 'instructionRole', 'apiMode', 'secondaryUrl', 'secondaryKey', 'secondaryModel', 'secondaryModels', 'inputCap', 'inputCapTokens', 'compressTarget'];
 const INSTRUCTION_POSITIONS = { tail: null, before: 2, after: 0, depth: 1 };
 
 function setStatus(message) {
@@ -111,7 +112,7 @@ function integrationState() {
         busy, paused, stage: activeRun?.stage ?? null,
         tokens: Number.isFinite(archive?.lastPromptTokens) ? archive.lastPromptTokens : null,
         sourceVersion: EXTENSION_VERSION,
-        capabilities: Object.freeze(['runManual.template', 'compress', 'inputCap']),
+        capabilities: Object.freeze(['runManual.template', 'compress', 'inputCap', 'geminiShield']),
         message: !integrationReady ? '喵喵大总结正在准备' : busy ? taskLabel(activeRun) || '喵喵大总结正在处理'
             : !settings?.enabled ? '大总结已关闭' : paused ? '自动总结已暂停，请查看大总结面板'
                 : settings.autoEnabled ? '自动总结已开启' : '手动总结已就绪 · 自动触发关闭',
@@ -1018,10 +1019,16 @@ async function requestMainApiSummary(context, prompt, { sourceOnly = false } = {
             try {
                 assertSummaryActive();
                 const original = JSON.parse(init.body);
-                const payload = secondary ? buildSecondaryRequest(context, original, secondary) : { ...original };
-                const streaming = settings.streamSummary && supportsSummaryStream(payload);
+                let payload = secondary ? buildSecondaryRequest(context, original, secondary) : { ...original };
+                let streaming = settings.streamSummary && supportsSummaryStream(payload);
                 payload.stream = Boolean(streaming);
                 payload.n = 1;
+                // Gemini 抗外审 / 抗截断：只改发出去的这一份，前面的原文核对不受影响。
+                const shield = applyGeminiShield(payload, { input: settings.geminiShieldInput, output: settings.geminiShieldOutput });
+                if (shield.payload) {
+                    payload = shield.payload;
+                    if (shield.meta.output) streaming = false;
+                }
                 const signal = requestSignals.signal;
                 if (task) task.stream = { enabled: streaming, text: '', chars: 0, thinking: false, startedAt: Date.now() };
                 syncTaskState();
@@ -1032,7 +1039,18 @@ async function requestMainApiSummary(context, prompt, { sourceOnly = false } = {
                 watchdog.touch();
                 if (!response.ok) throw summaryResponseError(response.status, await response.text());
                 let raw;
-                if (streaming || response.headers?.get('content-type')?.includes('text/event-stream')) {
+                if (shield.meta?.output) {
+                    // 抗截断：收齐整份回复，从总结工具里取正文
+                    const body = await readWholeBody(response, { signal, onChunk: () => watchdog.touch() });
+                    let json;
+                    if (shield.meta.google) json = collectGoogleStream(body);
+                    else {
+                        try { json = JSON.parse(body); }
+                        catch { throw summaryResponseError(response.status, body); }
+                    }
+                    request.rawText = unwrapShieldOutput(json, shield.meta).text;
+                    request.failure = null;
+                } else if (streaming || response.headers?.get('content-type')?.includes('text/event-stream')) {
                     if (task) task.stream.enabled = true;
                     const result = await readSummaryStream(response, { signal, onProgress: progress, allowJson: true });
                     request.rawText = result.text;
@@ -1157,6 +1175,7 @@ function getSettings() {
     settings.pendingRetries ??= [];
     if (typeof settings.autoEnabled !== 'boolean') settings.autoEnabled = true;
     if (typeof settings.streamSummary !== 'boolean') settings.streamSummary = true;
+    for (const key of ['geminiShieldInput', 'geminiShieldOutput']) if (typeof settings[key] !== 'boolean') settings[key] = false;
     if (!['main', 'secondary'].includes(settings.apiMode)) settings.apiMode = 'main';
     for (const key of ['secondaryUrl', 'secondaryKey', 'secondaryModel']) {
         if (typeof settings[key] !== 'string') settings[key] = '';
@@ -3658,7 +3677,7 @@ function syncActionState() {
 
 function populateSettingsDraft() {
     const controls = {
-        enabled: '.als-enabled', autoEnabled: '.als-auto-enabled', streamSummary: '.als-stream-summary', threshold: '.als-threshold', keepRecent: '.als-keep',
+        enabled: '.als-enabled', autoEnabled: '.als-auto-enabled', streamSummary: '.als-stream-summary', geminiShieldInput: '.als-gemini-input', geminiShieldOutput: '.als-gemini-output', threshold: '.als-threshold', keepRecent: '.als-keep',
         worldBookName: '.als-book', depth: '.als-depth', mode: '.als-settings-mode', promptStyle: '.als-settings-style',
         instructionPosition: '.als-instruction-position', instructionDepth: '.als-instruction-depth',
         instructionRole: '.als-instruction-role',
@@ -3911,6 +3930,8 @@ async function renderSettings() {
     ui.querySelector('.als-enabled').addEventListener('change', event => applyEnabledState(event.target.checked));
     bindInput('.als-auto-enabled', 'autoEnabled', Boolean);
     bindInput('.als-stream-summary', 'streamSummary', Boolean);
+    bindInput('.als-gemini-input', 'geminiShieldInput', Boolean);
+    bindInput('.als-gemini-output', 'geminiShieldOutput', Boolean);
     bindInput('.als-threshold', 'threshold', value => Math.max(1, Math.floor(Number(value) || DEFAULT_SETTINGS.threshold)));
     bindInput('.als-keep', 'keepRecent', value => Math.max(1, Math.floor(Number(value) || DEFAULT_SETTINGS.keepRecent)));
     bindInput('.als-book', 'worldBookName', value => String(value).trim());

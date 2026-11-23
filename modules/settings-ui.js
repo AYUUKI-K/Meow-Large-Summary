@@ -123,6 +123,9 @@ export function settingsMarkup(version) {
             <section class="als-form-section"><h4>API 与模型</h4><label class="als-field">总结使用的 API<select class="text_pole als-api-mode"><option value="main">主 API · 跟随当前酒馆连接</option><option value="secondary">副 API · OpenAI 兼容接口</option></select></label>
               <label class="als-switch als-switch-row"><span><strong>流式接收总结</strong><small>显示实时进度与正文。仅影响总结；接口不支持时可关闭。</small></span><input class="als-stream-summary" type="checkbox" aria-label="流式接收总结"><span class="als-switch-track" aria-hidden="true"></span></label>
               <p class="als-help">支持聊天补全主 API 和副 API；其他主 API 沿用完整响应。模型长时间无响应或中转缓冲时，流式仍可能超时。</p>
+              <label class="als-switch als-switch-row"><span><strong>Gemini 抗外审</strong><small>把要总结的资料放进工具结果再发，减少 Gemini 输入审查拦截（报 PROHIBITED_CONTENT / HTTP 400 时打开）。</small></span><input class="als-gemini-input" type="checkbox" aria-label="Gemini 抗外审"><span class="als-switch-track" aria-hidden="true"></span></label>
+              <label class="als-switch als-switch-row"><span><strong>Gemini 抗截断</strong><small>让模型通过工具一次交回完整总结，减少总结被截断或拦截。开启后不显示实时正文。</small></span><input class="als-gemini-output" type="checkbox" aria-label="Gemini 抗截断"><span class="als-switch-track" aria-hidden="true"></span></label>
+              <p class="als-help">这两项只对 Gemini 生效（Google AI Studio、Vertex AI，或模型名带 gemini 的中转），接口需要支持函数调用；其他模型照原样发送。推荐 Gemini 4 打开。</p>
               <div class="als-secondary-settings" hidden><p class="als-help">只用于总结，不改变聊天连接。采样使用副接口默认值，输出上限 65536 token，不继承主 API 的采样参数、停止词和随机种子喵。</p>
                 <label class="als-field">副 API 基础 URL<input class="text_pole als-secondary-url" type="url" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false"></label>
                 <label class="als-field">副 API Key<input class="text_pole als-secondary-key" type="password" placeholder="无密钥服务可留空" autocomplete="new-password" spellcheck="false"></label>

@@ -71,6 +71,12 @@
 
 新分支单独保存总结，不会改写主线正文或历史。只有来源指纹与分支原文吻合的记录才会继承。来源不明或跨过分叉点的记录不会自动当作有效旧总结；无可复用记录时暂停更新，不全量重跑历史，可到世界书中手动处理。
 
+### 报错：HTTP 400 / PROHIBITED_CONTENT（Gemini）
+
+Gemini 的输入审查拦下了这次总结：总结会把整段聊天历史放进一条消息发送，比正常聊天更容易被拦。在设置的“API 与模型”里打开“Gemini 抗外审”，资料会放进一次工具调用的结果里再发。总结写到一半被截断或输出被拦时，再打开“Gemini 抗截断”，模型通过工具一次交回完整总结（这时不显示实时正文）。
+
+两个开关只对 Gemini 生效（Google AI Studio、Vertex AI，或模型名带 gemini 的中转），接口需要支持函数调用；其他模型照原样发送。只改发出去的请求，原文核对和隐藏前确认不受影响。
+
 ### 报错：Unexpected token '<' / DOCTYPE / 不是有效 JSON
 
 这表示某个接口返回了 HTML 页面，却被当作 JSON 解析。可能是登录页、反向代理错误页或宿主不支持的路由；仅凭这条错误不能确定是哪一种。
@@ -123,7 +129,7 @@
 ## 开发检查
 
 ```sh
-node --experimental-vm-modules --test tests/regression.mjs tests/regressions.cjs tests/ui-model.mjs tests/summary-stream.mjs tests/host-compatibility.mjs tests/source-coverage.mjs tests/tauri-prompt-preview.mjs
+node --experimental-vm-modules --test tests/regression.mjs tests/regressions.cjs tests/ui-model.mjs tests/summary-stream.mjs tests/host-compatibility.mjs tests/source-coverage.mjs tests/tauri-prompt-preview.mjs tests/gemini-shield.mjs
 node --check index.js
 node tests/ui-smoke.mjs 8786
 ```

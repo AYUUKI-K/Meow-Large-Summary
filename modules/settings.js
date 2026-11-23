@@ -237,6 +237,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     autoEnabled: true,
     streamSummary: true,
+    // Gemini 抗外审 / 抗截断（工具包装），默认关，用户自己打开
+    geminiShieldInput: false,
+    geminiShieldOutput: false,
     threshold: 60000,
     keepRecent: 8,
     worldBookName: '喵喵大总结世界书',

@@ -340,6 +340,53 @@ for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-eve
     });
 }
 
+for (const [label, shield, expectRoles] of [
+    ['off', { geminiShieldInput: false, geminiShieldOutput: false }, ['user']],
+    ['input', { geminiShieldInput: true, geminiShieldOutput: false }, ['user', 'assistant', 'tool']],
+    ['input+output', { geminiShieldInput: true, geminiShieldOutput: true }, ['system', 'user', 'assistant', 'tool']],
+]) {
+    test(`Gemini shield ${label}: coverage still verified, wire request wrapped, summary saved`, async () => {
+        const f = await fixture({ autoEnabled: false, streamSummary: false, ...shield });
+        f.prepareSummary({ nativeRequest: true, coverage: true });
+        f.context.mainApi = 'openai';
+        const fetch = f.sandbox.fetch;
+        let sent = null;
+        f.sandbox.fetch = async (url, init) => {
+            if (!url.includes('/generate')) return fetch(url, init);
+            sent = JSON.parse(init.body);
+            if (shield.geminiShieldOutput) {
+                const chunk = { candidates: [{ content: { parts: [{ functionCall: { name: 'meow_submit_summary', args: { content: '工具交回的总结' } } }] }, finishReason: 'STOP' }] };
+                return new Response(`data: ${JSON.stringify(chunk)}\n\n`);
+            }
+            return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '完整总结' } }] }));
+        };
+        f.context.generate = async () => {
+            f.api.onGenerationAfterCommands('quiet', {}, false);
+            const core = f.context.chat.filter(message => !message.is_system).map((message, index) => ({ ...message, index }));
+            f.interceptor(core, 120000, () => assert.fail('unexpected abort'), 'quiet');
+            const messages = core.map(message => ({ role: message.is_user ? 'user' : 'assistant', content: message.mes }));
+            await f.context.eventSource.emit('prompt-ready', { chat: messages, dryRun: false });
+            const payload = { type: 'quiet', chat_completion_source: 'makersuite', model: 'gemini-4-argon', custom_prompt_post_processing: 'semi', messages };
+            f.api.onMainApiRequest(payload);
+            const response = await f.sandbox.fetch('/api/backends/chat-completions/generate', { body: JSON.stringify(payload) });
+            return (await response.json()).choices[0].message.content;
+        };
+        const completed = await f.api.runLargeSummary({ manual: true });
+        assert.ok(completed, 'summary completed');
+        assert.ok(sent, 'one model call');
+        const roles = sent.messages.map(message => message.role);
+        assert.deepEqual(roles.filter(role => role !== 'system'), expectRoles.filter(role => role !== 'system'));
+        if (shield.geminiShieldInput) {
+            assert.equal(sent.messages.at(-1).role, 'tool');
+            assert.ok(!sent.messages.slice(0, -1).some(message => String(message.content ?? '').includes(f.context.chat.find(m => !m.is_system).mes)), 'source only inside the tool result');
+            assert.equal(sent.custom_prompt_post_processing, 'semi_tools');
+        } else assert.equal(sent.tools, undefined);
+        assert.equal(sent.stream, Boolean(shield.geminiShieldOutput));
+        assert.match(bookEntry(f).content, shield.geminiShieldOutput ? /工具交回的总结/ : /完整总结/);
+        assert.deepEqual(f.executed, ['/hide 0-9']);
+    });
+}
+
 for (const change of ['edit', 'delete', 'swipe']) {
     test(`historical ${change} offers a choice and refuses full-history rebuilding without a checkpoint`, async () => {
         const f = await fixture({ autoEnabled: false });
