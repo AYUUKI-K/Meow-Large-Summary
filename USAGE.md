@@ -73,7 +73,7 @@
 
 ### 报错：HTTP 400 / PROHIBITED_CONTENT（Gemini）
 
-使用 Gemini 做总结时，「当前聊天」的 API 信息下方会显示「Gemini 抗外审」。Gemini 4 默认开启，其他 Gemini 默认关闭；手动开关后立即保存，后续 Gemini 总结优先使用这项选择。总结写到一半被截断或输出被拦时，可在「设置 → API 与模型」打开「Gemini 抗截断」。模型通过工具提交总结，期间不显示实时正文。
+使用 Gemini 做总结时，「当前聊天」的 API 信息下方会显示「Gemini 抗外审」和「Gemini 抗截断」，开关会立即保存。Gemini 4（含 `pg-gemini-4-*`）默认开启抗外审，手动选择优先；其他 Gemini 默认关闭抗外审。抗截断默认关闭，开启后等待完整总结，期间不显示实时正文。
 
 两个开关只对 Gemini 生效（Google AI Studio、Vertex AI，或模型名带 gemini 的中转），接口需要支持函数调用；其他模型照原样发送。只改发出去的请求，原文核对和隐藏前确认不受影响。
 

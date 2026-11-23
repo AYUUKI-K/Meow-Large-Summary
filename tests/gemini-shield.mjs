@@ -7,11 +7,11 @@ const summary = (extra = {}) => ({ type: 'quiet', chat_completion_source: 'maker
     messages: [{ role: 'system', content: '本次是历史资料总结任务。\n总结模板' }, { role: 'user', content: '资料段 NSFW 原文' }], ...extra });
 
 test('shield default follows the model family and an explicit choice wins', () => {
-    for (const model of ['gemini-4', 'gemini-4-argon', 'google/gemini-4.0-preview', 'publishers/google/models/gemini-4-flash', 'Gemini 4']) {
+    for (const model of ['gemini-4', 'gemini-4-argon', 'pg-gemini-4-hydrogen', 'vendor/pg-gemini-4-neon', 'google/gemini-4.0-preview', 'publishers/google/models/gemini-4-flash', 'Gemini 4']) {
         assert.equal(geminiShieldInputEnabled(null, model), true, model);
         assert.equal(geminiShieldInputEnabled(false, model), false, model);
     }
-    for (const model of ['gemini-3.1-pro', 'gemini-40', 'claude-opus', null]) {
+    for (const model of ['gemini-3.1-pro', 'pg-gemini-3.1-pro', 'pg-gemini-40', 'gemini-40', 'claude-opus', null]) {
         assert.equal(geminiShieldInputEnabled(null, model), false, model);
     }
     assert.equal(geminiShieldInputEnabled(true, 'gemini-3.1-pro'), true);

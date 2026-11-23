@@ -24,7 +24,7 @@ export function isGeminiTarget(payload) {
 
 export function geminiShieldInputEnabled(preference, model) {
     if (typeof preference === 'boolean') return preference;
-    return /(?:^|[/:])gemini[-_ ]?4(?=$|[.\-_/ :@])/i.test(String(model ?? '').trim());
+    return /(?:^|[/:])(?:pg-)?gemini[-_ ]?4(?=$|[.\-_/ :@])/i.test(String(model ?? '').trim());
 }
 
 export function shieldRequestId() {

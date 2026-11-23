@@ -3615,15 +3615,18 @@ function syncActionState() {
     const mainLabel = { custom: '自定义连接', openai: 'OpenAI', claude: 'Claude', openrouter: 'OpenRouter' }[mainProvider] ?? mainProvider;
     setUiText('.als-runtime-api', settings.apiMode === 'secondary'
         ? `副 API · ${settings.secondaryModel || 'OpenAI 兼容接口'}` : mainLabel ? `主 API · ${mainLabel}` : '主 API · 跟随酒馆连接');
-    const shieldSwitch = ui.querySelector('.als-gemini-input');
-    if (shieldSwitch) {
+    const shieldGroup = ui.querySelector('.als-gemini-home');
+    if (shieldGroup) {
         const connection = settings.apiMode === 'secondary' ? { chat_completion_source: 'custom', model: settings.secondaryModel }
             : context?.mainApi === 'openai' && context.chatCompletionSettings
                 ? { chat_completion_source: mainProvider, model: getChatModel?.(context.chatCompletionSettings) } : null;
         const supported = isGeminiTarget(connection);
-        setUiHidden('.als-gemini-home', !supported);
-        shieldSwitch.checked = supported && geminiShieldInputEnabled(settings.geminiShieldInput, connection.model);
-        shieldSwitch.disabled = !settings.enabled || Boolean(sendLockDepth) || !supported;
+        shieldGroup.hidden = !supported;
+        const input = shieldGroup.querySelector('.als-gemini-input');
+        const output = shieldGroup.querySelector('.als-gemini-output');
+        input.checked = supported && geminiShieldInputEnabled(settings.geminiShieldInput, connection.model);
+        output.checked = supported && settings.geminiShieldOutput;
+        input.disabled = output.disabled = !settings.enabled || Boolean(sendLockDepth) || !supported;
         setUiText('.als-gemini-state', settings.geminiShieldInput === null ? '随模型默认 · Gemini 4 默认开启' : '已保存手动选择');
     }
     const actionContext = !settings.enabled ? '启用插件后可整理；记录页仍可查看历史。'
@@ -3692,7 +3695,7 @@ function syncActionState() {
 
 function populateSettingsDraft() {
     const controls = {
-        enabled: '.als-enabled', autoEnabled: '.als-auto-enabled', streamSummary: '.als-stream-summary', geminiShieldOutput: '.als-gemini-output', threshold: '.als-threshold', keepRecent: '.als-keep',
+        enabled: '.als-enabled', autoEnabled: '.als-auto-enabled', streamSummary: '.als-stream-summary', threshold: '.als-threshold', keepRecent: '.als-keep',
         worldBookName: '.als-book', depth: '.als-depth', mode: '.als-settings-mode', promptStyle: '.als-settings-style',
         instructionPosition: '.als-instruction-position', instructionDepth: '.als-instruction-depth',
         instructionRole: '.als-instruction-role',
@@ -3945,23 +3948,25 @@ async function renderSettings() {
     ui.querySelector('.als-enabled').addEventListener('change', event => applyEnabledState(event.target.checked));
     bindInput('.als-auto-enabled', 'autoEnabled', Boolean);
     bindInput('.als-stream-summary', 'streamSummary', Boolean);
-    ui.querySelector('.als-gemini-input').addEventListener('change', async event => {
-        if (!settings.enabled || sendLockDepth) { syncActionState(); return; }
-        const previous = settings.geminiShieldInput;
-        settings.geminiShieldInput = event.currentTarget.checked;
-        lockSending();
-        try {
-            await persistSettingsNow();
-            settingsDraft.geminiShieldInput = settings.geminiShieldInput;
-        } catch (error) {
-            settings.geminiShieldInput = previous;
-            notify('error', `Gemini 抗外审未保存：${error.message}`);
-        } finally {
-            unlockSending();
-            syncSettingsState();
-        }
-    });
-    bindInput('.als-gemini-output', 'geminiShieldOutput', Boolean);
+    for (const [selector, key] of [['.als-gemini-input', 'geminiShieldInput'], ['.als-gemini-output', 'geminiShieldOutput']]) {
+        const control = ui.querySelector(selector);
+        control.addEventListener('change', async () => {
+            if (!settings.enabled || sendLockDepth) { syncActionState(); return; }
+            const previous = settings[key];
+            settings[key] = control.checked;
+            lockSending();
+            try {
+                await persistSettingsNow();
+                settingsDraft[key] = settings[key];
+            } catch (error) {
+                settings[key] = previous;
+                notify('error', `${control.getAttribute('aria-label')}未保存：${error.message}`);
+            } finally {
+                unlockSending();
+                syncSettingsState();
+            }
+        });
+    }
     bindInput('.als-threshold', 'threshold', value => Math.max(1, Math.floor(Number(value) || DEFAULT_SETTINGS.threshold)));
     bindInput('.als-keep', 'keepRecent', value => Math.max(1, Math.floor(Number(value) || DEFAULT_SETTINGS.keepRecent)));
     bindInput('.als-book', 'worldBookName', value => String(value).trim());

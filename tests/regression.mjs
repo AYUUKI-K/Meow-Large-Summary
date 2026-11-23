@@ -340,8 +340,9 @@ for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-eve
     });
 }
 
-for (const [label, shield, expectRoles] of [
+for (const [label, shield, expectRoles, target] of [
     ['Gemini 4 default', {}, ['user', 'assistant', 'tool']],
+    ['PG Gemini 4 custom relay default', {}, ['user', 'assistant', 'tool'], { chat_completion_source: 'custom', model: 'pg-gemini-4-hydrogen' }],
     ['off', { geminiShieldInput: false, geminiShieldOutput: false }, ['user']],
     ['input', { geminiShieldInput: true, geminiShieldOutput: false }, ['user', 'assistant', 'tool']],
     ['input+output', { geminiShieldInput: true, geminiShieldOutput: true }, ['system', 'user', 'assistant', 'tool']],
@@ -367,7 +368,7 @@ for (const [label, shield, expectRoles] of [
             f.interceptor(core, 120000, () => assert.fail('unexpected abort'), 'quiet');
             const messages = core.map(message => ({ role: message.is_user ? 'user' : 'assistant', content: message.mes }));
             await f.context.eventSource.emit('prompt-ready', { chat: messages, dryRun: false });
-            const payload = { type: 'quiet', chat_completion_source: 'makersuite', model: 'gemini-4-argon', custom_prompt_post_processing: 'semi', messages };
+            const payload = { type: 'quiet', chat_completion_source: 'makersuite', model: 'gemini-4-argon', custom_prompt_post_processing: 'semi', messages, ...target };
             f.api.onMainApiRequest(payload);
             const response = await f.sandbox.fetch('/api/backends/chat-completions/generate', { body: JSON.stringify(payload) });
             return (await response.json()).choices[0].message.content;
