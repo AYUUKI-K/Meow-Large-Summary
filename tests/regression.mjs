@@ -561,7 +561,7 @@ test('input budget warning follows connection capacity without modifying thresho
 // 夹具默认模拟「已经在用的老用户」；测新装默认值时传 { __fresh: true }。
 function legacyDefaults(savedSettings) {
     if (savedSettings?.__fresh) { const { __fresh, ...rest } = savedSettings; return rest; }
-    return { promptStyle: 'traditional', inputCap: 'safe', compressTarget: 5000, ...savedSettings };
+    return { promptStyle: 'traditional', inputCap: 'safe', compressTarget: 5000, keepRecent: 20, ...savedSettings };
 }
 
 async function fixture(savedSettings = {}, storageData = new Map(), extensionFolder = 'Meow-Large-Summary') {
@@ -3918,10 +3918,11 @@ test('input cap: one-shot by default, 60000 / 24000 segment tiers, custom, never
     assert.equal(budget('custom', 50000, 100000), 35000);
 });
 
-test('fresh installs default to MoM style, one-shot summaries and a 10000-token compression target', async () => {
+test('fresh installs default to MoM style, eight retained messages, one-shot summaries and a 10000-token compression target', async () => {
     const f = await fixture({ __fresh: true });
     const s = f.api.state().settings;
     assert.equal(s.promptStyle, 'chronicle');
+    assert.equal(s.keepRecent, 8);
     assert.equal(s.inputCap, 'context');
     assert.equal(s.compressTarget, 10000);
     assert.equal(s.prompt, defaultPrompt('chronicle', 'incremental'));

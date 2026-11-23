@@ -91,7 +91,22 @@
 .als-live-result { margin-bottom: 12px; }
 @keyframes als-turn { to { transform: rotate(360deg); } }
 .als-panel { display: flex; flex-direction: column; min-width: 0; gap: 20px; padding-top: 12px; }
-.als-overview { display: flex; flex-direction: column; gap: 12px; padding: 8px 2px 0; }
+.als-overview { display: flex; flex-direction: column; gap: 10px; padding: 8px 2px 0; }
+#als-panel-overview { gap: 14px; }
+.als-home-state { display: grid; gap: 4px; }
+.als-settings .als-state-heading { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.als-auto-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--als-control-line); }
+.als-state-heading[data-auto-active="true"] .als-auto-dot { background: #4caf70; }
+.als-home-status-detail { font-size: 12px; line-height: 1.6; }
+.als-home-task, .als-home-feedback { display: contents; }
+.als-home-feedback .als-notice { padding: 0; }
+.als-home-feedback .als-status-dot { display: none; }
+.als-home-task .als-task-row { display: grid; margin: 0; padding: 0; background: transparent; }
+.als-current-settings { border-top: 1px solid var(--als-rule); }
+.als-settings-summary, .als-settings-summary dd { margin: 0; }
+.als-settings-summary > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; padding-block: 3px; font-size: 13px; }
+.als-settings-summary dt { color: var(--als-ink-muted); }
+.als-settings-summary dd { text-align: right; overflow-wrap: anywhere; }
 .als-settings .als-compress-dialog {
     width: min(420px, calc(100vw - 32px));
     max-height: calc(100dvh - 32px);
@@ -109,7 +124,6 @@
 .als-compress-form :is(h3, p) { margin: 0; }
 .als-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .als-eyebrow { color: var(--als-ink-muted); font-size: 11px; letter-spacing: .08em; }
-.als-state-badge { padding: 3px 8px; border-radius: 4px; background: var(--als-bookmark-wash); font-size: 11px; font-weight: 500; }
 .als-chat-title { font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif; overflow-wrap: anywhere; }
 .als-chat-detail { font-size: 12px; margin-top: -4px !important; }
 .als-token-line { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; }
@@ -118,8 +132,9 @@
 .als-token-count { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .als-token-threshold { margin-top: -8px !important; }
 .als-scope { padding-block: 8px; }
-.als-scope-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 15px; }
+.als-scope-title { font-size: 13px; }
 .als-range-ribbon { display: flex; gap: 4px; height: 8px; margin: 8px 0 12px; overflow: hidden; border-radius: 4px; }
+.als-overview .als-range-ribbon { height: 5px; margin: 6px 0; }
 .als-range-old { flex: 1; background: color-mix(in srgb, var(--als-bookmark) 28%, transparent); border-radius: 4px; }
 .als-range-hidden { flex: 1; background: var(--als-control-line); border-radius: 4px; }
 .als-range-recent { flex: 1; background: var(--als-bookmark); border-radius: 4px; }
@@ -136,23 +151,20 @@
 .als-save-actions .als-prompt-use { grid-column: 1 / -1; }
 .als-range-labels strong { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
 .als-range-labels small { font-size: 11px; color: var(--als-ink-muted); font-variant-numeric: tabular-nums; }
-.als-runtime { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--als-ink-secondary); }
-.als-runtime > span { padding: 4px 8px; border-radius: 4px; border: 1px solid var(--als-rule); }
 .als-action-context { font-size: 12px; line-height: 1.6; }
 .als-settings .als-run { justify-content: space-between; width: 100%; min-height: 44px; }
 .als-settings .als-compact { width: 100%; }
 .als-action-hint { font-size: 11px; text-align: center; margin-top: -4px !important; }
 .als-settings .als-rebuild { width: 100%; border-color: var(--als-bookmark); }
-.als-overview .als-state-badge { align-self: flex-start; color: var(--als-ink-secondary); background: none; padding: 0; font-size: 13px; }
-.als-overview .als-chat-title { font-size: clamp(22px, 7cqi, 30px); line-height: 1.35; }
-.als-scope-description, .als-memory-result .als-summary-result { color: var(--als-ink-secondary); font-size: 14px; line-height: 1.7; }
+.als-scope-description, .als-memory-result .als-summary-result { color: var(--als-ink-secondary); font-size: 13px; line-height: 1.7; }
 .als-overview .als-scope { padding-block: 4px; }
-.als-overview .als-primary:not(:disabled) { display: flex; justify-content: space-between; width: 100%; min-height: 46px; padding-inline: 16px; color: #18221e; background: color-mix(in srgb, var(--als-bookmark) 58%, #dce8dd); border-color: transparent; }
-.als-overview .als-primary:not(:disabled):hover { background: color-mix(in srgb, var(--als-bookmark) 48%, #dce8dd); }
+.als-overview :is(.als-primary, .als-cancel):not(:disabled) { display: flex; justify-content: space-between; width: 100%; min-height: 46px; padding-inline: 16px; color: #18221e; background: color-mix(in srgb, var(--als-bookmark) 58%, #dce8dd); border-color: transparent; }
+.als-overview :is(.als-primary, .als-cancel):not(:disabled):hover { background: color-mix(in srgb, var(--als-bookmark) 48%, #dce8dd); }
+.als-overview .als-discard-progress { align-self: flex-start; }
 .als-memory-result { display: grid; gap: 14px; border-top: 1px solid var(--als-rule); padding-top: 14px; }
 .als-memory-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; font-size: 16px; line-height: 1.8; }
 .als-memory-links, .als-empty-memory { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; border-top: 1px solid var(--als-rule); }
-.als-memory-links:not(:has(> button:not([hidden]))), .als-action-context:empty, .als-summary-result:empty { display: none; }
+.als-memory-links:not(:has(> button:not([hidden]))), .als-home-status-detail:empty, .als-action-context:empty, .als-summary-result:empty { display: none; }
 .als-empty-memory { font-size: 14px; }
 .als-empty-memory span { color: var(--als-ink-muted); }
 .als-memory-links .als-text-button { min-height: 40px; }

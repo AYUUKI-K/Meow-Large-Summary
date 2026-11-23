@@ -3205,6 +3205,14 @@ function showTab(name) {
         button.tabIndex = selected || (button.dataset.tab === 'overview' && ['settings', 'prompt'].includes(name)) ? 0 : -1;
     }
     for (const panel of ui.querySelectorAll('.als-panel')) panel.hidden = panel.dataset.panel !== name;
+    for (const [selector, home, outlet] of [
+        ['.als-task-row', '.als-home-task', '.als-task-outlet'],
+        ['.als-notice', '.als-home-feedback', '.als-feedback-outlet'],
+    ]) {
+        const node = ui.querySelector(selector);
+        const slot = ui.querySelector(name === 'overview' ? home : outlet);
+        if (node && slot && node.parentElement !== slot) slot.append(node);
+    }
     ui.querySelector('.als-open-settings')?.setAttribute('aria-expanded', String(name === 'settings' || name === 'prompt'));
     if (name === 'directory') return renderDirectory();
 }
@@ -3460,7 +3468,8 @@ function syncActionState() {
         progressNote.hidden = !job || Boolean(activeRun);
         progressNote.textContent = job?.invalid ? '本地进度无法读取，请放弃进度后重新总结。'
             : job?.result ? (job.operation === 'compress' ? '继续时会从最近一版压缩结果接着处理。' : '正文已生成，继续时会重试保存，不再调用模型。')
-                : job ? `已完成 ${job.steps.length} 次生成${job.total ? `，原文共 ${job.total} 段` : ''}，继续时只处理未完成部分。` : '';
+                : job?.steps.length ? `已完成 ${job.steps.length} 次生成${job.total ? `，原文共 ${job.total} 段` : ''}，继续时只处理未完成部分。`
+                    : job ? '本轮还没有生成结果，继续后会从本轮开头处理。' : '';
         if (job?.storageError) progressNote.textContent += ' 浏览器存储失败，进度仅保留在本页；刷新前请导出草稿。';
     }
     const discardProgress = ui.querySelector('.als-discard-progress');
@@ -3489,6 +3498,7 @@ function syncActionState() {
     const current = getCharacterAndChat(context);
     const busy = !settings.enabled || Boolean(sendLockDepth) || !current;
     const hasMemory = Boolean(entry?.content?.trim());
+    const canImport = canImportInto(context);
     const compressReason = !settings.enabled ? '请先启用插件。'
         : !current ? '请先打开单人聊天。'
         : sendLockDepth ? '当前正在处理总结，请稍候。'
@@ -3512,8 +3522,8 @@ function syncActionState() {
         '.als-undo': busy || !journal || journal.phase === 'undone',
         '.als-undo-restore': busy || !journal || (journal.phase === 'undone' && !journal.combinedRestorePending),
         '.als-view-current': !entry,
-        '.als-carry-current': busy || !entry?.content?.trim(),
-        '.als-choose-import': busy || !canImportInto(context),
+        '.als-carry-current': busy || !hasMemory,
+        '.als-choose-import': busy || !canImport,
         '.als-refresh-context': busy,
     };
     for (const [selector, disabled] of Object.entries(controls)) {
@@ -3521,9 +3531,10 @@ function syncActionState() {
         if (button) button.disabled = disabled;
     }
     const chooseImport = ui.querySelector('.als-choose-import');
-    if (chooseImport) chooseImport.hidden = !canImportInto(context);
+    if (chooseImport) chooseImport.hidden = !canImport;
     const carryCurrent = ui.querySelector('.als-carry-current');
-    if (carryCurrent) carryCurrent.hidden = !entry?.content?.trim();
+    if (carryCurrent) carryCurrent.hidden = !hasMemory;
+    setUiHidden('.als-directory-actions', !canImport && !hasMemory);
     if (selectedSummary) updateRecordImportActions(directoryData?.entries?.[selectedSummary.uid]);
     setUiText('.als-undo-restore', journal?.combinedRestorePending ? '继续恢复本次原文' : '撤销本次整理');
     setUiHidden('.als-undo-restore', !journal || journal.phase === 'undone');
@@ -3546,10 +3557,21 @@ function syncActionState() {
     const total = scope.hiddenCount + scope.pendingCount + scope.keptCount;
     const autoState = automaticStatus(settings, archive, journal, { hasChat: Boolean(current), busy: Boolean(sendLockDepth),
         hasWork: Boolean(scope.range), chatLength: context?.chat?.length ?? 0 });
+    const stopped = Boolean(job && !busy);
+    const autoRunning = Boolean(activeRun?.automatic && !activeRun.cancelled);
+    const autoReady = Boolean(autoState.active && !stopped && !activeRun);
+    const statusHeading = ui.querySelector('.als-state-heading');
+    if (statusHeading) statusHeading.dataset.autoActive = String(autoRunning || autoReady);
+    setUiText('.als-state-badge', activeRun?.cancelled ? '正在停止'
+        : autoRunning ? (activeRun.stage === 'generating' ? '正在自动总结' : '自动总结处理中')
+        : activeRun?.stage === 'restoring' ? '正在恢复本次原文'
+        : activeRun?.operation === 'compress' ? '正在压缩已有总结'
+        : activeRun ? '正在整理'
+        : stopped ? (job.operation === 'compress' ? '有一轮压缩未完成' : '有一轮总结未完成')
+        : autoReady ? '自动总结已开启' : autoState.label === '手动模式' ? '仅手动总结' : autoState.label);
     setUiText('.als-chat-title', current?.chatName ?? '请选择一个聊天存档');
     setUiText('.als-chat-detail', current ? `${current.characterName} · ${total} 条消息 · ${entry ? archiveRecords(entry).length : 0} 次总结记录` : '打开单人聊天后即可整理与保存记忆。');
-    setUiText('.als-state-badge', job && !sendLockDepth ? '已停止' : autoState.label);
-    setUiText('.als-auto-status', job && !sendLockDepth ? '有未完成的总结，可继续或放弃进度；不会自动重试。' : autoState.reason);
+    setUiText('.als-auto-status', stopped ? '有未完成的总结，可继续或放弃进度；不会自动重试。' : autoState.reason);
     setUiText('.als-token-count', Number.isFinite(archive?.lastPromptTokens) ? archive.lastPromptTokens.toLocaleString() : '—');
     setUiText('.als-token-threshold', budgetWarning || (settings.autoEnabled ? `自动触发阈值 ${Number(settings.threshold).toLocaleString()} token` : '手动模式下，可按需刷新计数。'));
     setUiText('.als-hidden-count', `${scope.hiddenCount} 条`);
@@ -3561,21 +3583,29 @@ function syncActionState() {
         const segment = ui.querySelector(selector);
         if (segment) { segment.style.flexGrow = String(count); segment.hidden = !count; }
     }
-    setUiText('.als-runtime-mode', MODE_LABELS[settings.mode]);
+    setUiText('.als-runtime-mode', settings.mode === 'merged' ? '合并全文' : '追加新增');
     setUiText('.als-runtime-style', PROMPT_STYLE_LABELS[settings.promptStyle]);
-    setUiText('.als-runtime-api', settings.apiMode === 'secondary' ? '副 API' : '主 API');
-    setUiText('.als-action-context', !settings.enabled ? '启用插件后可整理；记录页仍可查看历史。'
+    setUiText('.als-runtime-threshold', settings.enabled && settings.autoEnabled ? `${Number(settings.threshold).toLocaleString()} token` : '已关闭');
+    setUiText('.als-runtime-keep', `最近 ${settings.keepRecent} 条`);
+    const mainProvider = context?.mainApi === 'openai' ? context.chatCompletionSettings?.chat_completion_source
+        : context?.mainApi === 'textgenerationwebui' ? context.textCompletionSettings?.type : context?.mainApi;
+    const mainLabel = { custom: '自定义连接', openai: 'OpenAI', claude: 'Claude', openrouter: 'OpenRouter' }[mainProvider] ?? mainProvider;
+    setUiText('.als-runtime-api', settings.apiMode === 'secondary'
+        ? `副 API · ${settings.secondaryModel || 'OpenAI 兼容接口'}` : mainLabel ? `主 API · ${mainLabel}` : '主 API · 跟随酒馆连接');
+    const actionContext = !settings.enabled ? '启用插件后可整理；记录页仍可查看历史。'
         : archive?.pendingContinuation ? `接续记忆尚未写入，请检查世界书“${archive.pendingContinuation.bookName}”并刷新。`
         : archive?.pendingSummarySave ? '上次写入结果尚未确认，请先刷新世界书状态。'
         : journal?.combinedRestorePending && !journal.messagesRestored ? '总结已撤销，原文尚未全部恢复。继续恢复不会再次撤销或重新生成。'
-        : job && !job.invalid ? (job.operation === 'compress' ? '继续压缩本次已保存的总结。' : `本次处理至第 ${job.sourceEnd} 层；停止后新增的消息留给下一次总结。`)
+        : job && !job.invalid ? (job.operation === 'compress' ? '本次只处理已保存的总结。' : `本轮范围截至第 ${job.sourceEnd} 层。停止后新增的消息留到下一轮。`)
         : archive?.sourceChanged ? '原文已改变，请选择更新记忆或保留现有总结。确认前暂停自动总结，仍可继续聊天。'
         : archive?.coverageBlocked ? '上次未能核实总结用到的聊天原文。检查聊天历史、上下文长度和会改写请求的扩展后，可手动重试。' + (entry ? '点「查看完整记忆」可核对手改正文。' : '')
         : archive?.branch?.needsRebuild ? '部分旧总结无法确认属于当前分支。可从有效旧总结更新记忆，或到世界书中手动处理。'
         : journal?.phase === 'saved' ? '总结已保存，隐藏未完成。请在“恢复与撤销”中只重试隐藏，无需再次总结。'
         : scope.range || entry?.content?.trim() ? ''
-        : total <= scope.recentCount ? '当前消息均在保留范围内，没有可处理的旧消息。可继续聊天或仅合并已有总结。'
-        : '没有可处理的旧消息：旧消息已总结、已隐藏或正文为空。可继续聊天或仅合并已有总结。');
+        : total <= scope.recentCount ? '当前消息均在保留范围内，没有可处理的旧消息。'
+        : '没有可处理的旧消息：旧消息已总结、已隐藏或正文为空。';
+    setUiText('.als-action-context', actionContext);
+    setUiText('.als-home-status-detail', actionContext || activeRun || stopped || (autoReady && scope.range) ? '' : autoState.reason);
     setUiHidden('.als-world-book-edit', !edited);
     setUiText('.als-summary-result', summaryResultText(journal));
     setUiText('.als-token-comparison', tokenComparisonText(archive?.lastSummaryTokens, journal));
@@ -3593,9 +3623,8 @@ function syncActionState() {
     setUiHidden('.als-view-current', !hasMemory || (reading && !busy));
     setUiHidden('.als-empty-memory', !current || hasMemory || Boolean(job));
     setUiText('.als-scope-title', scope.hiddenCount || entry ? '整理当前可见剧情' : `本次总结全部 ${total} 条消息`);
-    setUiText('.als-scope-description', `保存后隐藏较早的 ${scope.pendingCount} 条，保留 ${scope.keptCount} 条可见原文。`);
+    setUiText('.als-scope-description', `保存后隐藏较早的 ${scope.pendingCount} 条，保留 ${scope.keptCount} 条可见原文。${scope.hideEnd >= 0 ? `隐藏范围截至第 ${scope.hideEnd} 层。` : ''}`);
     if (reading) {
-        setUiText('.als-state-badge', settings.enabled ? '记忆已保存' : '插件已停用');
         const excerpt = ui.querySelector('.als-memory-excerpt');
         const source = lastRecord?.content && entry.content.endsWith(lastRecord.content) ? lastRecord.content : entry.content;
         if (excerpt && excerptSource !== source) {
@@ -4082,7 +4111,7 @@ async function renderSettings() {
     });
     ui.querySelector('.als-go-settings').addEventListener('click', () => {
         showTab('settings');
-        ui.querySelector('.als-keep').focus();
+        ui.querySelector('.als-settings-title').focus();
     });
     ui.querySelector('.als-view-current').addEventListener('click', async () => {
         const id = getContext()?.chatMetadata?.[MODULE_NAME]?.archiveId;
@@ -4194,7 +4223,7 @@ function initialize() {
     for (const name of ['MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPED']) {
         if (context.eventTypes[name]) context.eventSource.on(context.eventTypes[name], onChatContentChanged);
     }
-    for (const name of ['CHATCOMPLETION_MODEL_CHANGED', 'CHATCOMPLETION_SOURCE_CHANGED', 'PRESET_CHANGED', 'SETTINGS_UPDATED']) {
+    for (const name of ['MAIN_API_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED', 'CHATCOMPLETION_SOURCE_CHANGED', 'PRESET_CHANGED', 'SETTINGS_UPDATED']) {
         if (context.eventTypes[name]) context.eventSource.on(context.eventTypes[name], refreshBudgetWarning);
     }
     void refreshBudgetWarning();

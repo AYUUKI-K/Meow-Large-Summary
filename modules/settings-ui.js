@@ -35,52 +35,57 @@ export function settingsMarkup(version) {
             <button type="button" class="als-icon-button als-open-settings" aria-label="设置" title="设置" aria-controls="als-panel-settings">${uiIcon('tune')}</button>
             <button type="button" class="als-icon-button als-open-floating" aria-label="打开悬浮面板" title="打开悬浮面板">${uiIcon('window')}</button>
           </div>
-          <div class="als-notice"><span class="als-status-dot" aria-hidden="true"></span><div class="als-status" role="status" aria-live="polite">正在读取当前存档…</div></div>
-          <div class="als-task-row"><div class="als-task-track"><span aria-hidden="true"></span><small class="als-task-state" role="status"></small></div><button type="button" class="menu_button als-cancel" hidden>停止</button></div>
+          <div class="als-feedback-outlet"></div>
+          <div class="als-task-outlet"></div>
           <details class="als-live-result als-disclosure" hidden><summary>查看正在生成的正文</summary><div class="als-disclosure-body"><p class="als-help">完整结束后才会保存并隐藏旧消息；中断内容会留在当前聊天中供复制。</p><textarea class="text_pole als-live-text" rows="6" readonly aria-label="正在生成的总结正文"></textarea></div></details>
 
           <div class="als-panel" id="als-panel-overview" data-panel="overview" role="tabpanel" aria-labelledby="als-tab-overview">
             <section class="als-overview">
-              <p class="als-state-badge">读取中</p>
-              <h3 class="als-chat-title">请选择一个聊天存档</h3>
+              <div class="als-home-state">
+                <h3 class="als-state-heading"><span class="als-auto-dot" aria-hidden="true"></span><span class="als-state-badge">读取中</span></h3>
+                <div class="als-home-feedback"><div class="als-notice"><span class="als-status-dot" aria-hidden="true"></span><div class="als-status" role="status" aria-live="polite">正在读取当前存档…</div></div></div>
+                <p class="als-home-status-detail als-muted"></p>
+                <p class="als-action-context als-muted"></p>
+              </div>
               <div class="als-scope">
-                <div class="als-scope-heading"><strong class="als-scope-title"></strong><button type="button" class="als-text-button als-go-settings">调整保留条数</button></div>
+                <strong class="als-scope-title"></strong>
                 <div class="als-range-ribbon" aria-hidden="true"><span class="als-range-hidden"></span><span class="als-range-old"></span><span class="als-range-recent"></span></div>
                 <p class="als-scope-description"></p>
               </div>
-              <section class="als-memory-result" hidden>
-                <p class="als-memory-excerpt"></p>
-                <p class="als-summary-result" role="status"></p>
-              </section>
-              <p class="als-action-context als-muted"></p>
               <p class="als-world-book-edit als-help" role="status" hidden>已读到世界书里手改的正文。可以继续总结，下次保存会把这版记为「世界书手改」。</p>
+              <div class="als-home-task"><div class="als-task-row"><div class="als-task-track"><span aria-hidden="true"></span><small class="als-task-state" role="status"></small></div><button type="button" class="menu_button als-cancel" hidden>停止生成</button></div></div>
               <button type="button" class="menu_button als-primary als-next-action" hidden></button>
               <button type="button" class="menu_button als-resume" hidden>继续总结</button>
-              <p class="als-progress-note als-help" role="status" hidden></p>
-              <button type="button" class="als-text-button als-discard-progress" hidden>放弃进度</button>
+              <button type="button" class="als-text-button als-discard-progress" hidden>放弃本次进度</button>
               <button type="button" class="menu_button als-primary als-run"><span>立即总结</span>${uiIcon('arrow')}</button>
+              <p class="als-progress-note als-help" role="status" hidden></p>
 
               <p class="als-help als-source-warning" role="status" hidden>原文已改变，可选择更新记忆或保留现有总结继续使用。</p>
               <button type="button" class="menu_button als-rebuild" hidden>更新记忆（从有效总结接续）</button>
               <button type="button" class="menu_button als-retain-memory" hidden>不重构，保留现有总结</button>
             </section>
-            <div class="als-memory-links">
-              <button type="button" class="als-text-button als-view-current">查看完整记忆 ${uiIcon('arrow')}</button>
-              <button type="button" class="als-text-button als-undo-restore" title="恢复整理前的记忆与本轮隐藏的原文" hidden>撤销本次整理</button>
-            </div>
-            <div class="als-actions" role="group" aria-label="总结操作">
-              <button type="button" class="menu_button als-compress">压缩大总结</button>
-              <button type="button" class="menu_button als-compact" hidden>仅合并已有总结</button>
-              <button type="button" class="menu_button als-carry-current" hidden>带总结开新聊天</button>
-              <button type="button" class="menu_button als-choose-import" hidden>从旧档导入总结</button>
-            </div>
-            <div class="als-empty-memory" hidden>上次记忆<span>还没有总结记录</span></div>
+            <section class="als-current-settings" aria-labelledby="als-current-settings-title">
+              <div class="als-section-heading"><h3 id="als-current-settings-title">当前设置</h3><button type="button" class="als-text-button als-go-settings" aria-controls="als-panel-settings">自定义设置 ${uiIcon('arrow')}</button></div>
+              <dl class="als-settings-summary">
+                <div><dt>总结风格</dt><dd class="als-runtime-style"></dd></div>
+                <div><dt>总结方式</dt><dd class="als-runtime-mode"></dd></div>
+                <div><dt>自动触发</dt><dd class="als-runtime-threshold"></dd></div>
+                <div><dt>保留原文</dt><dd class="als-runtime-keep"></dd></div>
+                <div><dt>总结使用的 API</dt><dd class="als-runtime-api"></dd></div>
+              </dl>
+            </section>
             <details class="als-incomplete-result als-disclosure" hidden><summary>未完成的总结草稿</summary><div class="als-disclosure-body"><p class="als-incomplete-reason als-help"></p><p class="als-draft-state als-help" role="status"></p><textarea class="text_pole als-incomplete-text" rows="8" readonly aria-label="未完成的总结正文"></textarea><div class="als-actions"><button type="button" class="menu_button als-incomplete-copy">复制未完成结果</button><button type="button" class="menu_button als-incomplete-download">下载未完成正文</button><button type="button" class="menu_button als-incomplete-retry" hidden>重试本地存储</button><button type="button" class="als-text-button als-incomplete-delete">删除这份草稿</button></div></div></details>
             <details class="als-disclosure als-chat-details"><summary>整理详情与工具</summary><div class="als-disclosure-body">
+              <h3 class="als-chat-title">请选择一个聊天存档</h3>
               <p class="als-chat-detail als-muted"></p>
+              <section class="als-memory-result" hidden>
+                <p class="als-memory-excerpt"></p>
+                <p class="als-summary-result" role="status"></p>
+              </section>
+              <div class="als-memory-links"><button type="button" class="als-text-button als-view-current">查看完整记忆 ${uiIcon('arrow')}</button></div>
+              <div class="als-empty-memory" hidden>上次记忆<span>还没有总结记录</span></div>
               <div class="als-range-labels"><div><span class="als-range-key als-range-key-hidden"><i></i>已经隐藏</span><strong class="als-hidden-count">—</strong><small>当前实际状态</small></div><div><span class="als-range-key"><i></i>还将隐藏</span><strong class="als-hide-count">—</strong><small class="als-hide-range"></small></div><div><span class="als-range-key als-range-key-recent"><i></i>继续保留</span><strong class="als-keep-count">—</strong><small class="als-keep-range"></small></div></div>
               <div class="als-token-line"><span><small>最近计数</small><strong class="als-token-count">—</strong><small>token</small></span><button type="button" class="als-icon-button als-refresh-context" aria-label="重新计算上下文 token" title="重新计算上下文 token">${uiIcon('refresh')}</button></div><p class="als-token-threshold als-help"></p>
-              <div class="als-runtime"><span class="als-runtime-style"></span><span class="als-runtime-mode"></span><span class="als-runtime-api"></span></div>
               <p class="als-auto-status als-help"></p><p class="als-token-comparison als-help"></p><p class="als-last-operation als-muted"></p>
               <div class="als-book-state"><span class="als-book-status als-muted">正在读取世界书状态…</span><button type="button" class="als-icon-button als-book-check" aria-label="刷新世界书状态" title="刷新世界书状态">${uiIcon('refresh')}</button></div>
             <details class="als-recovery als-disclosure"><summary>${uiIcon('undo')}<span>恢复与撤销</span><span class="als-disclosure-note">最近一次操作</span></summary>
@@ -90,6 +95,7 @@ export function settingsMarkup(version) {
                 <div><button type="button" class="menu_button als-retry-hide" disabled>只重试隐藏</button><small>总结已保存，直接完成隐藏，不再调用模型。</small></div>
                 <div><button type="button" class="menu_button als-restore" disabled>恢复本轮隐藏的消息</button><small>仅恢复本轮改变的消息，原先隐藏的保持原样。</small></div>
                 <div><button type="button" class="menu_button als-undo" disabled>撤销最近一次总结</button><small>恢复之前的注入正文，本次输出保留在历史中。</small></div>
+                <div><button type="button" class="menu_button als-undo-restore" hidden>撤销本次整理</button><small>恢复整理前的记忆与本轮隐藏的原文。</small></div>
               </div><p class="als-help">后续修改过原文或隐藏状态时，自动恢复会停止，避免覆盖你的操作。</p>
             </details>
             </div></details>
@@ -105,7 +111,7 @@ export function settingsMarkup(version) {
             <section class="als-form-section"><h4>自动与保留</h4>
               <label class="als-switch als-switch-row"><span><strong>自动总结</strong><small>达到阈值时自动整理；关闭后仍可手动总结。</small></span><input class="als-auto-enabled" type="checkbox" aria-label="自动总结"><span class="als-switch-track" aria-hidden="true"></span></label>
               <div class="als-grid"><label class="als-field">触发 token 数<input class="text_pole als-threshold" type="number" min="1" step="1000"></label><label class="als-field">保留最近消息条数<input class="text_pole als-keep" type="number" min="1" step="1"></label></div>
-              <small class="als-keep-help als-help">20 条消息通常约为 10 轮问答；保留数量只决定隐藏边界。</small>
+              <small class="als-keep-help als-help">保留数量决定总结保存后的隐藏边界。</small>
               <p class="als-help als-budget-warning" role="status" hidden></p>
             </section>
             <section class="als-form-section"><h4>Token 额度</h4>
@@ -129,6 +135,10 @@ export function settingsMarkup(version) {
               <label class="als-switch als-switch-row"><span><strong>显示悬浮入口</strong><small>立即生效，记住当前浏览器的选择。关闭后仍可从扩展面板打开。</small></span><input class="als-floating-visible" type="checkbox" aria-label="显示悬浮入口"><span class="als-switch-track" aria-hidden="true"></span></label>
               <label class="als-switch als-switch-row"><span><strong>靠边自动精简</strong><small>拖到左右边缘松手后，只显示最近 token 计数；点击展开，拖离恢复。立即生效，记住当前浏览器的选择。</small></span><input class="als-floating-compact" type="checkbox" aria-label="靠边自动精简"><span class="als-switch-track" aria-hidden="true"></span></label>
             </section>
+            <details class="als-disclosure als-manual-tools"><summary>手动工具</summary><div class="als-disclosure-body">
+              <button type="button" class="menu_button als-compress">压缩已有总结…</button>
+              <button type="button" class="menu_button als-compact" hidden>仅合并已有总结</button>
+            </div></details>
             <details class="als-disclosure als-advanced"><summary>${uiIcon('tune')}<span>世界书与指令位置</span><span class="als-disclosure-note">高级设置</span></summary><div class="als-disclosure-body">
               <label class="als-field">世界书名称<input class="text_pole als-book" type="text" maxlength="80"></label>
               <label class="als-field">世界书插入深度<input class="text_pole als-depth" type="number" min="0" step="1"></label><p class="als-help">首次总结自动创建并挂载世界书，每个存档独立保存。</p>
@@ -155,6 +165,10 @@ export function settingsMarkup(version) {
           <div class="als-panel" id="als-panel-directory" data-panel="directory" role="tabpanel" aria-labelledby="als-tab-directory" hidden>
             <div class="als-directory-list">
               <div class="als-page-heading"><h3>故事的记忆存档</h3><p>查看当前注入内容，也可以回到某一次总结。</p></div>
+              <div class="als-actions als-directory-actions" hidden>
+                <button type="button" class="menu_button als-carry-current" hidden>带总结开新聊天</button>
+                <button type="button" class="menu_button als-choose-import" hidden>从旧档导入总结</button>
+              </div>
               <div class="als-directory-tools"><input class="text_pole als-directory-search" type="search" placeholder="搜索角色或存档" aria-label="搜索角色或聊天存档"><select class="text_pole als-card-filter" aria-label="筛选角色"><option value="">所有角色</option></select></div>
               <div class="als-directory-heading"><small class="als-directory-count als-muted">暂无记录</small><button type="button" class="als-icon-button als-directory-refresh" aria-label="刷新目录" title="刷新目录">${uiIcon('refresh')}</button></div>
               <div class="als-tree"></div><div class="als-pagination"><button type="button" class="menu_button als-page-prev">上一页</button><span class="als-page-label">1 / 1</span><button type="button" class="menu_button als-page-next">下一页</button></div>

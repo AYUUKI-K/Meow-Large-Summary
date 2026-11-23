@@ -238,7 +238,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     autoEnabled: true,
     streamSummary: true,
     threshold: 60000,
-    keepRecent: 20,
+    keepRecent: 8,
     worldBookName: '喵喵大总结世界书',
     depth: 9999,
     mode: 'incremental',

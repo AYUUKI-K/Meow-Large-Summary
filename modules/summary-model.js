@@ -186,8 +186,8 @@ export function automaticStatus(settings, archive, journal, { hasChat, busy, has
     if (!settings.autoEnabled) return { label: '手动模式', reason: '自动总结已关闭，可以按需手动整理。' };
     if (Number.isInteger(archive?.undoAtLength) && chatLength <= archive.undoAtLength) return { label: '等待新消息', reason: '刚撤销的总结不会立即重做，新增消息后再检查。' };
     if (archive?.summaryStillOverThreshold) return { label: '自动已暂停', reason: '总结后仍超阈值，已暂停连续自动总结；可调整设置或仅合并已有总结。' };
-    if (!hasWork) return { label: '等待新消息', reason: '没有可处理的旧消息，继续对话后再检查。' };
-    return { label: '自动模式', reason: `回复结束后检查上下文，达到 ${Number(settings.threshold).toLocaleString()} token 时自动总结。` };
+    if (!hasWork) return { label: '等待新消息', active: true, reason: '没有可处理的旧消息，继续对话后再检查。' };
+    return { label: '自动模式', active: true, reason: `回复结束后检查上下文，达到 ${Number(settings.threshold).toLocaleString()} token 时自动总结。` };
 }
 
 export function tokenComparisonText(metrics, journal) {
