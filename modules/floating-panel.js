@@ -1,7 +1,6 @@
 const STORAGE_KEY = 'meow-large-summary-panel-v1';
 const mounted = new WeakMap();
 const finite = (value, fallback) => Number.isFinite(value) ? value : fallback;
-const modeMarkup = '<span class="als-float-modes"><span class="als-float-mode als-plugin-mode">插件开启</span><span class="als-float-mode als-auto-mode">自动开启</span></span>';
 
 export function clampPanelFrame(frame = {}, viewport) {
     if (!frame || typeof frame !== 'object') frame = {};
@@ -89,10 +88,12 @@ export function mountFloatingPanel(root, { onOpen = () => {} } = {}) {
     const header = document.createElement('div');
     header.className = 'als-floating-header';
     header.hidden = true;
-    header.innerHTML = '<div class="als-floating-title"><button type="button" class="als-floating-grip" aria-label="移动悬浮窗口，方向键微调位置，Home 键复位" title="拖动标题栏移动；方向键微调，Home 键复位"><span class="als-mascot als-header-mascot" aria-hidden="true"></span><span>喵喵大总结</span><span class="als-grip-dots" aria-hidden="true">⠿</span></button><div class="als-floating-modes" role="status" aria-live="polite">' + modeMarkup + '</div></div><button type="button" class="als-icon-button als-floating-minimize" aria-label="收起悬浮窗口" title="收起悬浮窗口"><span aria-hidden="true">−</span></button><button type="button" class="als-text-button als-floating-close" title="关闭悬浮窗和猫咪入口，可从扩展面板重新打开">关闭悬浮窗</button>';
+    header.innerHTML = '<div class="als-floating-title"><button type="button" class="als-floating-grip" aria-label="移动悬浮窗口，方向键微调位置，Home 键复位" title="拖动标题栏移动；方向键微调，Home 键复位"><span class="als-mascot als-header-mascot" aria-hidden="true"></span><span>喵喵大总结</span><span class="als-grip-dots" aria-hidden="true">⠿</span></button></div><button type="button" class="als-icon-button als-floating-minimize" aria-label="收起悬浮窗口" title="收起悬浮窗口"><span aria-hidden="true">−</span></button><button type="button" class="als-text-button als-floating-close" title="关闭悬浮窗和猫咪入口，可从扩展面板重新打开">关闭悬浮窗</button>';
     root.prepend(header);
     const handle = header.querySelector('.als-floating-grip');
     const opener = root.querySelector('.als-open-floating');
+    const settingsButton = root.querySelector('.als-open-settings');
+    const navigation = root.querySelector('.als-navigation');
     const visibilityToggle = root.querySelector('.als-floating-visible');
     const compactToggle = root.querySelector('.als-floating-compact');
     const syncVisibility = () => {
@@ -152,6 +153,7 @@ export function mountFloatingPanel(root, { onOpen = () => {} } = {}) {
         open = false;
         stopDrag();
         header.hidden = true;
+        navigation.insertBefore(settingsButton, opener);
         root.classList.remove('als-floating');
         root.removeAttribute('role');
         root.removeAttribute('aria-label');
@@ -190,6 +192,7 @@ export function mountFloatingPanel(root, { onOpen = () => {} } = {}) {
         root.setAttribute('aria-modal', 'false');
         root.setAttribute('aria-label', '喵喵大总结悬浮面板');
         header.hidden = false;
+        header.insertBefore(settingsButton, header.querySelector('.als-floating-minimize'));
         home.hidden = false;
         syncVisibility();
         launcher.setAttribute('aria-expanded', 'true');
@@ -353,8 +356,6 @@ export function mountFloatingPanel(root, { onOpen = () => {} } = {}) {
                 node.title = description;
                 node.setAttribute('aria-label', description);
             };
-            updateMode(header.querySelector('.als-plugin-mode'), enabled ? '插件开启' : '插件关闭', enabled ? 'on' : 'off', pluginState);
-            updateMode(header.querySelector('.als-auto-mode'), !autoEnabled ? '自动关闭' : enabled ? '自动开启' : '自动暂停', !autoEnabled ? 'off' : enabled ? 'on' : 'paused', autoState);
             updateMode(shell.querySelector('.als-launcher-mode'), !enabled ? '停用' : autoEnabled ? '自动' : '手动', !enabled ? 'off' : autoEnabled ? 'on' : 'manual', `${pluginState}；${autoState}`);
             launcher.classList.toggle('als-launcher-busy', busy);
             launcher.classList.toggle('als-launcher-paused', !enabled);

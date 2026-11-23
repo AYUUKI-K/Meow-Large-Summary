@@ -12,13 +12,14 @@ export function setTaskStage(task, stage) {
 export function taskLabel(task) {
     if (!task) return '';
     const elapsed = Math.max(0, Math.floor((Date.now() - task.startedAt) / 1000));
+    const part = task.stage === 'generating' && task.part ? `${task.part} · ` : '';
     if (task.stage === 'generating' && task.stream) {
         const stream = task.stream;
         const phase = stream.chars ? `接收正文 · ${stream.chars.toLocaleString()} 字`
             : !stream.enabled ? '等待完整响应' : stream.thinking ? '模型思考中'
                 : stream.lastReceivedAt ? '等待正文' : '等待响应';
         const idle = Math.floor((Date.now() - (stream.lastReceivedAt ?? stream.startedAt)) / 1000);
-        return `${phase} · ${elapsed} 秒${idle >= 15 ? ` · ${idle} 秒未收到新数据` : ''}`;
+        return `${part}${phase} · ${elapsed} 秒${idle >= 15 ? ` · ${idle} 秒未收到新数据` : ''}`;
     }
-    return `${TASK_LABELS[task.stage] ?? '处理中'} · ${elapsed} 秒`;
+    return `${part}${TASK_LABELS[task.stage] ?? '处理中'} · ${elapsed} 秒`;
 }

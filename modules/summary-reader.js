@@ -1,3 +1,15 @@
+// The overview displays a short plain-text excerpt. Never mount model markup there.
+export function memoryExcerpt(content) {
+    const text = String(content ?? '').replace(/<(script|style|summary)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+        .replace(/<\/?[a-z][\w:-]*(?:\s[^>]*?)?\s*\/?>/gi, ' ')
+        .replace(/^[ \t]*(?:#{1,6}\s+|[-*]\s+)/gm, '').replace(/\*\*|__/g, '')
+        .replace(/&(amp|lt|gt|quot|nbsp|#39);/g, (_, key) =>
+            ({ amp: '&', lt: '<', gt: '>', quot: '"', nbsp: ' ', '#39': "'" })[key])
+        .replace(/\s+/g, ' ').trim();
+    const excerpt = Array.from(text.slice(0, 322));
+    return excerpt.length > 160 ? excerpt.slice(0, 160).join('') + '…' : text;
+}
+
 // Use the host's shared, maintained parser and sanitizer. Never inject model
 // HTML without sanitization; old hosts fall back to plain text.
 export function renderSummaryReader(node, source, libraries = {}) {

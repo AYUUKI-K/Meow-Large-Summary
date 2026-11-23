@@ -34,8 +34,8 @@ async page => {
                 await checkPage.evaluate(light => document.body.classList.toggle('light', light), light);
                 check(await onTop('.als-floating-grip'), 'panel header is covered by a sidebar');
                 check(await onTop('.als-floating-close'), 'panel close control is covered');
-                await panel.getByRole('tab', { name: '设置', exact: true }).click();
-                await panel.getByRole('tab', { name: '概览', exact: true }).click();
+                await panel.getByRole('button', { name: '设置', exact: true }).click();
+                await panel.getByRole('tab', { name: '当前聊天', exact: true }).click();
             }
             const grip = checkPage.locator('.als-floating-grip');
             const before = await panel.boundingBox();

@@ -2,6 +2,21 @@
 // No markers are inserted into messages and no extra model request is made.
 const normalize = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 
+// Request wrappers can reserialize JSON without changing the model input.
+// Compare every field, preserving message order and all whitespace in strings.
+export function matchesRequestBody(expected, actual) {
+    if (!expected || typeof actual !== 'string') return false;
+    if (expected === actual) return true;
+    const equal = (a, b) => {
+        if (a === b) return true;
+        if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+        const keys = Object.keys(a);
+        return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && equal(a[key], b[key]));
+    };
+    try { return equal(JSON.parse(expected), JSON.parse(actual)); }
+    catch { return false; }
+}
+
 export function createCoveragePlan(chat) {
     return { chat: chat.slice(), sources: null, missing: null, observed: false };
 }

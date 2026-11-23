@@ -4,8 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { SourceTextModule, SyntheticModule, createContext } from 'node:vm';
-import { DEFAULT_PROMPT, DEFAULT_MERGED_PROMPT } from '../modules/settings.js';
-import { PREVIOUS_DEFAULT_PROMPT, PREVIOUS_DEFAULT_MERGED_PROMPT, LEGACY_DEFAULT_PROMPT } from '../modules/legacy-prompts.js';
+import { DEFAULT_PROMPT, DEFAULT_MERGED_PROMPT, defaultPrompt } from '../modules/settings.js';
+import { PREVIOUS_DEFAULT_PROMPT, PREVIOUS_DEFAULT_MERGED_PROMPT, LEGACY_DEFAULT_PROMPT, PRIOR_DEFAULT_PROMPT, PRIOR_DEFAULT_MERGED_PROMPT, PRIOR_MEMORY_PROMPT, PRIOR_MEMORY_MERGED_PROMPT } from '../modules/legacy-prompts.js';
 
 const source = await readFile(process.env.MEOW_TEST_SOURCE || new URL('../index.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
@@ -267,9 +267,11 @@ test('summary stream on an older WebView uses the existing host fetch bridge and
 const bookEntry = f => Object.values(f.writes.at(-1)?.data.entries ?? {}).find(entry =>
     entry.extensions?.auto_large_summary?.archiveId === f.api.evaluate('getContext().chatMetadata.auto_large_summary?.archiveId'));
 
-for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-event', 'missing-interceptor', 'macro', 'text-full', 'text-trimmed']) {
+for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-event', 'missing-interceptor', 'macro', 'text-full', 'text-trimmed', 'reserialized', 'final-text-changed', 'secondary-unobserved', 'secondary-reserialized']) {
     test(`summary coverage ${scenario}: no extra model call and no unsafe hide`, async () => {
-        const f = await fixture({ autoEnabled: false, streamSummary: false });
+        const secondary = scenario.startsWith('secondary-');
+        const f = await fixture({ autoEnabled: false, streamSummary: false, apiMode: secondary ? 'secondary' : 'main',
+            secondaryUrl: 'https://secondary.test/v1', secondaryModel: 'test' });
         f.prepareSummary({ nativeRequest: true, coverage: true });
         const textCompletion = scenario.startsWith('text-');
         f.context.mainApi = textCompletion ? 'kobold' : 'openai';
@@ -307,12 +309,15 @@ for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-eve
             if (scenario === 'transformed') messages[0].content = '楼层零';
             const payload = { type: 'quiet', model: 'mock', messages };
             f.api.onMainApiRequest(payload);
-            const response = await f.sandbox.fetch('/api/backends/chat-completions/generate', { body: JSON.stringify(payload) });
+            if (scenario === 'secondary-unobserved') return '宿主已返回正文，最终发送过程不可见';
+            if (scenario === 'final-text-changed') payload.messages[0].content += '额外文字';
+            const body = scenario.endsWith('reserialized') ? JSON.stringify(Object.fromEntries(Object.entries(payload).reverse()), null, 2) : JSON.stringify(payload);
+            const response = await f.sandbox.fetch('/api/backends/chat-completions/generate', { body });
             return (await response.json()).choices[0].message.content;
         };
         const completed = await f.api.runLargeSummary({ manual: true });
-        const passes = ['full', 'sparse', 'transformed', 'macro', 'text-full'].includes(scenario);
-        assert.equal(calls, passes ? 1 : 0);
+        const passes = ['full', 'sparse', 'transformed', 'macro', 'text-full', 'reserialized', 'secondary-reserialized'].includes(scenario);
+        assert.equal(calls, passes || scenario === 'final-text-changed' ? 1 : 0);
         assert.equal(Boolean(completed), passes);
         const expectedHide = scenario === 'sparse' ? '/hide 0-7' : '/hide 0-9';
         assert.deepEqual(f.executed, passes ? [expectedHide] : []);
@@ -327,7 +332,9 @@ for (const scenario of ['full', 'sparse', 'trimmed', 'transformed', 'missing-eve
             assert.deepEqual(f.context.chat, original);
             assert.equal(f.writes.length, 0);
             assert.equal(f.context.chatMetadata.auto_large_summary.coverageBlocked, true);
-            assert.equal(f.controls.get('.als-rebuild').hidden, false);
+            assert.equal(f.controls.get('.als-rebuild').hidden, true);
+            assert.equal(f.api.evaluate('summaryJob(getContext().chatMetadata.auto_large_summary.archiveId)'), null);
+            if (scenario === 'final-text-changed' || scenario === 'secondary-unobserved') assert.match(f.controls.get('.als-status').textContent, /最终请求.*手改/);
             assert.equal(f.api.evaluate('canSummarize(getContext(), true)'), false);
         }
     });
@@ -860,6 +867,31 @@ function overviewControls(f) {
     return selector => f.controls.get(selector);
 }
 
+test('the current chat switches from confirmed range to saved text; recovery takes precedence over the preview', async () => {
+    const f = await fixture({ autoEnabled: false });
+    f.prepareSummary();
+    const c = overviewControls(f);
+    for (const selector of ['.als-scope', '.als-memory-result', '.als-memory-excerpt', '.als-scope-description', '.als-undo-restore']) {
+        f.controls.set(selector, {});
+    }
+    f.controls.set('.als-next-action', { dataset: {} });
+    f.api.evaluate('syncActionState()');
+    assert.equal(c('.als-scope').hidden, false);
+    assert.match(c('.als-scope-description').textContent, /10 条，保留 20 条/);
+    assert.equal(c('.als-memory-result').hidden, true);
+    f.api.evaluate("requestMainApiSummary = async () => '<details><summary>新增记忆</summary><p>钥匙已交给白露。</p></details>'");
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+    assert.equal(c('.als-memory-excerpt').textContent, '钥匙已交给白露。');
+    assert.equal(c('.als-memory-result').hidden, false);
+    assert.equal(c('.als-scope').hidden, true);
+    assert.equal(c('.als-undo-restore').hidden, false);
+    assert.equal(c('.als-next-action').dataset.target, '.als-view-current');
+    f.context.chatMetadata.auto_large_summary.pendingSummarySave = true;
+    f.api.evaluate('syncActionState()');
+    assert.equal(c('.als-memory-result').hidden, true);
+    assert.equal(c('.als-next-action').dataset.target, '.als-book-check');
+});
+
 test('overview promotes repair and saved results, without executing the suggested action', async () => {
     const f = await fixture({ autoEnabled: false });
     f.prepareSummary();
@@ -898,14 +930,15 @@ test('editing the running template preserves other drafts and makes unsaved runt
     assert.ok(f.notices.some(n => n.kind === 'success' && n.args[0].includes('当前仍使用 传统详述')));
 });
 
-test('a coverage failure keeps ordinary retry available alongside the suggested rebuild', async () => {
+test('a coverage failure offers ordinary retry without suggesting a rebuild', async () => {
     const f = await fixture(); f.prepareSummary();
     await f.api.evaluate('ensureArchive()');
     const c = overviewControls(f);
     f.controls.set('.als-next-action', { dataset: {} });
     f.context.chatMetadata.auto_large_summary.coverageBlocked = true;
     f.api.evaluate('syncActionState()');
-    assert.equal(c('.als-next-action').dataset.target, '.als-rebuild');
+    assert.equal(c('.als-next-action').hidden, true);
+    assert.equal(c('.als-rebuild').hidden, true);
     assert.equal(c('.als-run').hidden, false);
     assert.equal(c('.als-run').disabled, false);
 });
@@ -1413,6 +1446,28 @@ test('upgrading legacy settings preserves custom prompts and repairs missing tem
     assert.equal(defaults.api.state().settings.promptStyle, 'traditional');
 });
 
+test('both shipped styles upgrade in place and preserve an individually edited memory template', async () => {
+    const preferences = {
+        prompts: { incremental: PRIOR_DEFAULT_PROMPT, merged: PRIOR_DEFAULT_MERGED_PROMPT },
+        memoryPrompts: { incremental: PRIOR_MEMORY_PROMPT, merged: PRIOR_MEMORY_MERGED_PROMPT },
+        mode: 'merged', promptStyle: 'memory',
+    };
+    const f = await fixture(preferences);
+    const settings = f.api.state().settings;
+    for (const mode of ['incremental', 'merged']) {
+        assert.equal(settings.prompts[mode], defaultPrompt('traditional', mode));
+        assert.equal(settings.memoryPrompts[mode], defaultPrompt('memory', mode));
+    }
+    assert.equal(settings.prompt, defaultPrompt('memory', 'merged'));
+    const custom = PRIOR_MEMORY_MERGED_PROMPT + '\n另记角色绰号。';
+    const g = await fixture({ ...preferences, memoryPrompts: { incremental: PRIOR_MEMORY_PROMPT, merged: custom } });
+    assert.equal(g.api.state().settings.prompt, custom);
+    await g.api.persistSettingsNow();
+    const reloaded = await fixture(g.savedPreferences.at(-1).auto_large_summary);
+    assert.equal(reloaded.api.state().settings.prompt, custom);
+    assert.equal(reloaded.api.state().settings.memoryPrompts.incremental, defaultPrompt('memory', 'incremental'));
+});
+
 test('both default templates use the native user macro instead of a fixed persona name', async () => {
     const f = await fixture();
     for (const template of [...Object.values(f.api.state().settings.prompts), ...Object.values(f.api.state().settings.memoryPrompts)]) {
@@ -1503,11 +1558,13 @@ test('removing default task openings leaves customized prompts and saved summary
     assert.equal(f.executed.length, 0);
 });
 
-test('both summary modes expand the user macro through ST before sending while preserving the saved template', async () => {
+for (const promptStyle of ['traditional', 'memory']) test(`${promptStyle} defaults expand macros and persist the complete response in both modes`, async () => {
     for (const mode of ['incremental', 'merged']) {
-        const f = await fixture({ mode });
+        const f = await fixture({ promptStyle, mode });
         f.prepareSummary();
         const template = f.api.state().settings.prompt;
+        assert.equal(template, defaultPrompt(promptStyle, mode));
+        const body = '<details><summary>大总结</summary>林舟已将钥匙交给白露，白露约定明早归还。只有白露知道暗门的位置。</details>';
         let calls = 0;
         f.context.substituteParamsExtended = async text => {
             calls++;
@@ -1518,10 +1575,13 @@ test('both summary modes expand the user macro through ST before sending while p
             assert.ok(prompt.includes('当前用户角色'));
             assert.ok(!prompt.includes('{{user}}'));
             assert.ok(!prompt.includes('结城爱'));
-            return '<details><summary>大总结</summary>事件记录</details>';
+            return body;
         };
         f.api.evaluate('requestMainApiSummary = async (_context, prompt) => __fixtures.capture(prompt)');
         assert.equal(await f.api.runLargeSummary(), true);
+        const entry = bookEntry(f);
+        assert.equal(entry.content, body);
+        assert.equal(entry.extensions.auto_large_summary.records.at(-1).content, body);
         assert.equal(calls, 1);
         assert.equal(f.api.state().settings.prompt, template);
         assert.ok(f.api.state().settings.prompt.includes('{{user}}'));
@@ -2976,12 +3036,14 @@ test('round deletion uses the record the user selected and refuses a stale list 
     meta.characterName = '角色 A';
     meta.chatName = '旧故事';
     meta.records.push({round:2, mode:'incremental', content:'第二轮'});
+    entry.content += '\n\n第二轮';
     const book = {entries:{2:entry}};
     await f.context.saveWorldInfo('喵喵大总结世界书', book);
     f.api.evaluate(`directoryData = __fixtures.book(); selectedSummary = {uid:2, archiveId:'previous', bookName:settings.worldBookName};
         syncCurrentArchive = async () => {}; renderDirectory = async () => {}; showSummary = () => {};`);
     f.controls.get('.als-history-select').value = '0';
     meta.records.shift();
+    entry.content = '第二轮';
     await f.context.saveWorldInfo('喵喵大总结世界书', book);
     const writes = f.writes.length;
     await assert.rejects(f.api.evaluate('deleteSummarySelection({roundOnly:true})'), /轮次已变动/);
@@ -3129,6 +3191,67 @@ test('undo will not overwrite a manually edited world book entry', async () => {
     await f.api.evaluate('recoverLatestSummary("undo")');
     assert.equal(f.writes.length, writes);
     assert.equal(bookEntry(f).content, '用户在世界书中修正了总结');
+});
+
+test('editing the existing entry refreshes the panel and preserves the short version across append, checkpoint and undo', async () => {
+    const f = await fixture({ autoEnabled: false });
+    f.prepareSummary();
+    const c = overviewControls(f);
+    for (const key of ['.als-world-book-edit', '.als-undo-restore', '.als-memory-excerpt']) f.controls.set(key, {});
+    f.controls.set('.als-next-action', { dataset: {} });
+    f.api.evaluate('requestMainApiSummary = async () => "长正文，含用户稍后删去的细节。"');
+    await f.api.runLargeSummary({ manual: true });
+    const data = structuredClone(f.writes.at(-1).data);
+    const flags = structuredClone(f.context.chat);
+    const before = data.entries[0].extensions.auto_large_summary;
+    data.entries[0].content = '钥匙交给了白露。';
+    await f.context.saveWorldInfo(f.api.state().settings.worldBookName, data);
+    const writes = f.writes.length;
+    await f.api.evaluate('onWorldBookUpdated("别的世界书")');
+    assert.equal(c('.als-world-book-edit').hidden, true);
+    await f.api.evaluate('onWorldBookUpdated(settings.worldBookName)');
+    assert.equal(c('.als-world-book-edit').hidden, false);
+    assert.equal(c('.als-undo-restore').hidden, true);
+    assert.equal(c('.als-memory-excerpt').textContent, '钥匙交给了白露。');
+    assert.equal(f.writes.length, writes);
+    assert.deepEqual(f.context.chat, flags);
+
+    f.context.chat.push({ mes: '白露次日启程。', is_user: false, name: '角色 A' });
+    f.api.evaluate('requestMainApiSummary = async () => "白露次日启程。"');
+    assert.equal(await f.api.runLargeSummary({ manual: true }), true);
+    const entry = bookEntry(f);
+    assert.equal(entry.content, '钥匙交给了白露。\n\n白露次日启程。');
+    const [original, edit, latest] = entry.extensions.auto_large_summary.records;
+    assert.match(original.content, /删去的细节/);
+    assert.equal(edit.operation, 'manual-edit');
+    assert.equal(edit.content, '钥匙交给了白露。');
+    assert.equal(edit.sourceEnd, before.sourceEnd);
+    assert.equal(edit.sourceDigest, before.sourceDigest);
+    assert.equal(latest.round, edit.round + 1);
+    const checkpoint = () => f.api.evaluate('memoryUpdateCheckpoint(archiveRecords(currentSummaryEntry), getContext().chat)');
+    assert.equal(checkpoint().content, entry.content);
+    await f.api.evaluate('recoverLatestSummary("undo")');
+    assert.equal(bookEntry(f).content, edit.content);
+    assert.equal(bookEntry(f).extensions.auto_large_summary.round, edit.round);
+    assert.equal(checkpoint().content, edit.content);
+});
+
+test('rebuild never falls back behind a manual replacement with unverifiable sources', async () => {
+    const f = await fixture();
+    f.prepareSummary();
+    await f.api.runLargeSummary();
+    f.context.chat.push({ mes: '新剧情' });
+    await f.api.runLargeSummary();
+    const data = structuredClone(f.writes.at(-1).data);
+    data.entries[0].content = '只保留这版。';
+    await f.context.saveWorldInfo(f.api.state().settings.worldBookName, data);
+    f.context.chat.at(-1).mes = '改变最后一层，但第一轮来源仍有效';
+    f.api.evaluate('requestMainApiSummary = async () => { throw new Error("unexpected model call"); }');
+    const writes = f.writes.length, hides = f.executed.length;
+    assert.equal(await f.api.runLargeSummary({ operation: 'rebuild' }), false);
+    assert.equal(f.writes.length, writes);
+    assert.equal(f.executed.length, hides);
+    assert.equal(bookEntry(f).content, '只保留这版。');
 });
 
 test('edits to the retained recent messages during generation also discard the stale summary', async () => {
@@ -3629,4 +3752,145 @@ test('archive activation groups many archives without repeatedly traversing the 
     assert.equal(saved[2].disable, true);
     assert.equal(saved[999].content, '手写世界书');
     assert.equal(saved[999].disable, false);
+});
+
+function prepareLongSummary(f) {
+    f.prepareSummary();
+    f.context.chat = Array.from({ length: 6 }, (_, index) => ({ mes: `事件${index}：` + '长剧情。'.repeat(1500),
+        name: index % 2 ? '角色 A' : '用户', is_user: !(index % 2), is_system: false }));
+    f.context.getTokenCountAsync = async text => text.length;
+}
+
+test('segmented stop survives reload, resumes only incomplete steps, and commits one undoable operation', async () => {
+    const storage = new Map();
+    const f = await fixture({ keepRecent: 2 }, storage);
+    prepareLongSummary(f);
+    f.api.evaluate(`__fixtures.calls = 0; requestMainApiSummary = async (_, prompt, options) => {
+        if (!options.sourceOnly) throw new Error('large chat must use bounded source');
+        __fixtures.calls++;
+        if (__fixtures.calls === 2) { cancelCurrentTask(); return 'unfinished'; }
+        return 'completed first segment';
+    };`);
+    await f.api.runLargeSummary({ manual: true });
+    const pending = f.api.evaluate('summaryJob("archive-a")');
+    assert.equal(pending.steps.length, 1);
+    assert.equal(pending.result, null);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.executed.length, 0);
+    assert.equal(f.api.state().sendLockDepth, 0);
+    assert.equal(f.api.evaluate('canSummarize(getContext(), true)'), false, 'a stopped job must not restart automatically');
+
+    const g = await fixture({ keepRecent: 2 }, storage);
+    prepareLongSummary(g);
+    g.context.chatMetadata = structuredClone(f.context.chatMetadata);
+    g.context.chat.push({ mes: 'NEW MESSAGE AFTER STOP', name: '用户', is_user: true, is_system: false });
+    for (const selector of ['.als-hide-count', '.als-keep-count', '.als-keep-range']) g.controls.set(selector, { textContent: '' });
+    g.api.evaluate('syncActionState()');
+    assert.equal(g.controls.get('.als-hide-count').textContent, '4 条');
+    assert.equal(g.controls.get('.als-keep-count').textContent, '3 条');
+    g.api.evaluate(`__fixtures.calls = 0; requestMainApiSummary = async (_, prompt, options) => {
+        if (prompt.includes('NEW MESSAGE AFTER STOP')) throw new Error('new messages belong to next task');
+        if (!options.sourceOnly) throw new Error('must keep source range');
+        __fixtures.calls++;
+        if (prompt.includes('【本轮笔记 1】')) {
+            if (!prompt.includes('completed first segment') || !prompt.includes('completed remaining segment')) throw new Error('missing notes');
+            return 'single consolidated addition';
+        }
+        return 'completed remaining segment';
+    };`);
+    assert.equal(await g.api.evaluate('resumeSummaryJob()'), true);
+    assert.equal(g.api.evaluate('__fixtures.calls'), pending.total - 1 + 1, 'remaining segments and one consolidation');
+    const entry = bookEntry(g);
+    assert.equal(entry.content, 'single consolidated addition');
+    assert.equal(entry.extensions.auto_large_summary.records.length, 1);
+    assert.equal(entry.extensions.auto_large_summary.sourceEnd, 5);
+    assert.deepEqual(g.executed, ['/hide 0-3']);
+    assert.equal(g.api.evaluate('summaryJob("archive-a")'), null);
+    await g.api.evaluate('recoverLatestSummary("undo-restore")');
+    assert.ok(g.context.chat.every(message => !message.is_system));
+    assert.equal(bookEntry(g).content, '');
+    assert.equal(bookEntry(g).extensions.auto_large_summary.records.length, 1);
+});
+
+for (const change of ['source', 'visibility', 'settings', 'worldbook']) test(`stopped summary rejects changed ${change} without new model calls`, async () => {
+    const f = await fixture({ keepRecent: 2 });
+    prepareLongSummary(f);
+    f.api.evaluate(`__fixtures.calls = 0; requestMainApiSummary = async () => {
+        __fixtures.calls++; if (__fixtures.calls === 2) throw new Error('network failure'); return 'first segment';
+    };`);
+    await f.api.runLargeSummary();
+    const calls = f.api.evaluate('__fixtures.calls');
+    if (change === 'source') f.context.chat[0].mes += 'edited';
+    if (change === 'visibility') f.context.chat[0].is_system = true;
+    if (change === 'settings') f.api.evaluate('settings.prompt += " changed";');
+    if (change === 'worldbook') await f.context.saveWorldInfo('test', { entries: { 0: ownedSummaryEntry(0, 'archive-a') } });
+    const beforeWrites = f.writes.length;
+    await f.api.evaluate('resumeSummaryJob()');
+    assert.equal(f.api.evaluate('__fixtures.calls'), calls);
+    assert.equal(f.writes.length, beforeWrites);
+    assert.equal(f.executed.length, 0);
+    assert.ok(f.api.evaluate('summaryJob("archive-a")'));
+});
+
+test('complete output retries an unsuccessful write without another model request', async () => {
+    const f = await fixture();
+    f.prepareSummary();
+    f.api.evaluate(`__fixtures.calls = 0; requestMainApiSummary = async () => { __fixtures.calls++; return 'complete output'; };`);
+    const save = f.context.saveWorldInfo;
+    f.context.saveWorldInfo = async () => { throw new Error('write unavailable'); };
+    await f.api.runLargeSummary();
+    assert.equal(f.api.evaluate('summaryJob("archive-a").result'), 'complete output');
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingSummarySave, true);
+    assert.equal(f.executed.length, 0);
+    f.context.saveWorldInfo = save;
+    f.api.evaluate('reconcileArchiveMetadata(getContext().chatMetadata.auto_large_summary, null)');
+    assert.equal(await f.api.evaluate('resumeSummaryJob()'), true);
+    assert.equal(f.api.evaluate('__fixtures.calls'), 1);
+    assert.deepEqual(f.executed, ['/hide 0-9']);
+});
+
+test('confirmed write reconciles a stale browser job instead of repeating the model request', async () => {
+    const storage = new Map();
+    const f = await fixture({}, storage);
+    f.prepareSummary();
+    const remove = f.sandbox.localStorage.removeItem;
+    f.sandbox.localStorage.removeItem = key => {
+        if (key.startsWith('meow-large-summary-job')) throw new Error('storage unavailable');
+        remove(key);
+    };
+    assert.equal(await f.api.runLargeSummary(), true);
+    assert.ok([...storage.keys()].some(key => key.startsWith('meow-large-summary-job')));
+    const g = await fixture({}, storage);
+    g.context.chatMetadata = structuredClone(f.context.chatMetadata);
+    g.sandbox.__fixtures.saved = structuredClone(bookEntry(f));
+    assert.ok(g.api.evaluate('summaryJob("archive-a")'));
+    g.api.evaluate('reconcileArchiveMetadata(getContext().chatMetadata.auto_large_summary, __fixtures.saved)');
+    assert.equal(g.api.evaluate('summaryJob("archive-a")'), null);
+});
+
+test('silent native model requests time out, release controls and retain a retryable job', {timeout:1500}, async () => {
+    const f = await fixture();
+    f.prepareSummary({nativeRequest:true});
+    f.sandbox.setTimeout = (callback, ms, ...args) => setTimeout(callback, ms === 300000 ? 15 : ms, ...args);
+    const normalFetch = f.sandbox.fetch;
+    let aborted = false, stopped = false;
+    f.context.stopGeneration = () => { stopped = true; };
+    f.sandbox.fetch = async (url, init) => {
+        if (!url.endsWith('/generate')) return normalFetch(url, init);
+        return await new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => {
+            aborted = true; reject(init.signal.reason);
+        }, {once:true}));
+    };
+    f.context.generate = async () => {
+        const payload = {type:'quiet',messages:[{role:'user',content:'source'}]};
+        f.api.onMainApiRequest(payload);
+        return await f.sandbox.fetch('/api/backends/chat-completions/generate', {body:JSON.stringify(payload)});
+    };
+    await f.api.runLargeSummary();
+    assert.ok(aborted && stopped);
+    assert.equal(f.api.state().sendLockDepth, 0);
+    assert.equal(f.writes.length, 0);
+    assert.equal(f.executed.length, 0);
+    assert.ok(f.api.evaluate('summaryJob("archive-a")'));
+    assert.match(f.controls.get('.als-status').textContent, /5 分钟/);
 });

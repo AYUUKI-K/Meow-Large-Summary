@@ -1,3 +1,19 @@
+// Generation may be long, but should not wait forever on a silent connection.
+// This timer belongs to one request and is never used to race host writes.
+export function createIdleWatchdog(onTimeout, timeoutMs = 300000) {
+    let timer;
+    const touch = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            const error = new Error('总结请求连续 5 分钟没有收到新数据，已停止等待。可点击“继续总结”重试未完成部分。');
+            error.name = 'TimeoutError';
+            onTimeout(error);
+        }, timeoutMs);
+    };
+    touch();
+    return { touch, dispose: () => clearTimeout(timer) };
+}
+
 // Bound reads and body consumption together. Never race a host write: a late
 // write must settle before another archive can be activated.
 export async function withRequestSignal(operation, { signal, timeoutMs = 30000 } = {}) {

@@ -72,7 +72,10 @@ export function sourceChangeAccepted(chat, metadata, digest = end => historyDige
 }
 
 export function memoryUpdateCheckpoint(records, chat) {
-    const valid = branchRecords(records, chat);
+    // Rebuilding this archive must never resurrect a draft the user replaced.
+    const ordered = activeRecords(records);
+    const edit = ordered.findLastIndex(record => record.operation === 'manual-edit');
+    const valid = branchRecords(edit < 0 ? ordered : ordered.slice(edit), chat);
     const last = valid.at(-1);
     const content = combineRecords(valid).trim();
     return last && content ? { content, sourceEnd: last.sourceEnd, round: last.round } : null;
@@ -97,7 +100,7 @@ export function branchRecords(records, chat) {
     let inherited = [];
     let missingEarlier = false;
     for (const record of activeRecords(records)) {
-        const known = Number.isInteger(record.sourceEnd) && (record.sourceEnd >= 0 || (record.operation === 'carry' && record.sourceEnd === -1)) && record.sourceDigest
+        const known = Number.isInteger(record.sourceEnd) && (record.sourceEnd >= 0 || (['carry', 'manual-edit'].includes(record.operation) && record.sourceEnd === -1)) && record.sourceDigest
             && digest(record.sourceEnd) === record.sourceDigest;
         if (!known) { missingEarlier = true; continue; }
         if (record.mode === 'merged') {
@@ -179,7 +182,7 @@ export function automaticStatus(settings, archive, journal, { hasChat, busy, has
     if (archive?.pendingSummarySave) return { label: '等待保存确认', reason: '请刷新世界书状态，确认上次总结是否已保存。' };
     if (journal?.combinedRestorePending && !journal.messagesRestored) return { label: '等待恢复原文', reason: '总结已撤销，请继续完成本次原文恢复。' };
     if (journal?.phase === 'saved' && !journal.messagesRestored) return { label: '等待隐藏', reason: '总结已保存，请只重试隐藏，无需重新生成。' };
-    if (archive?.coverageBlocked) return { label: '输入检查未通过', reason: '自动总结已暂停；调整上下文后手动重试，或从原文重建。' };
+    if (archive?.coverageBlocked) return { label: '输入检查未通过', reason: '自动总结已暂停。检查上下文和请求设置后可手动重试。' };
     if (!settings.autoEnabled) return { label: '手动模式', reason: '自动总结已关闭，可以按需手动整理。' };
     if (Number.isInteger(archive?.undoAtLength) && chatLength <= archive.undoAtLength) return { label: '等待新消息', reason: '刚撤销的总结不会立即重做，新增消息后再检查。' };
     if (archive?.summaryStillOverThreshold) return { label: '自动已暂停', reason: '总结后仍超阈值，已暂停连续自动总结；可调整设置或仅合并已有总结。' };
@@ -218,6 +221,7 @@ export function entryRevision(entry, marker) {
 
 export function sourceDescription(record) {
     if (!record) return '暂无总结记录';
+    if (record.operation === 'manual-edit') return '世界书手改正文，沿用原记录的覆盖范围';
     if (record.operation === 'carry') return `接续自“${record.fromChat}”的已保存总结`;
     const source = Number.isInteger(record.sourceEnd) && record.sourceEnd >= 0
         ? `总结时到第 ${record.sourceEnd} 层（${record.sourceEnd + 1} 条消息）` : '旧记录未保存总结来源终点';

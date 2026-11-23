@@ -62,8 +62,6 @@
 .als-mascot { display: block; width: 40px; height: 40px; flex: 0 0 auto; background: url("assets/meow-note-cat.png") center / contain no-repeat; pointer-events: none; }
 .als-brand-mark { width: 1em; height: 1em; }
 .als-heading b { font-size: inherit; font-weight: inherit; }
-.als-topline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.als-topline .als-tagline { flex: 1; }
 .als-tagline { color: var(--als-ink-muted); font-size: 12px; }
 .als-switch { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; position: relative; }
 .als-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -74,7 +72,10 @@
 .als-switch input:focus-visible + .als-switch-track { outline: 2px solid var(--als-control-focus); outline-offset: 4px; }
 .als-switch:has(input:disabled) { opacity: .45; cursor: not-allowed; }
 .als-master { flex: 0 0 auto; font-size: 12px; }
-.als-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 8px; background: var(--als-paper-inset); }
+.als-navigation { display: flex; align-items: center; gap: 4px; padding-block: 6px; border-bottom: 1px solid var(--als-rule); }
+.als-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: 1; min-width: 0; gap: 4px; }
+.als-navigation .als-icon-button, .als-floating-header .als-open-settings { min-width: 38px; min-height: 42px; }
+.als-open-settings[aria-expanded="true"] { background: var(--als-bookmark-wash); }
 .als-tab { display: flex; justify-content: center; align-items: center; gap: 6px; min-height: 40px; min-width: 0; padding: 8px 4px; border: 0; border-radius: 5px; background: transparent; color: var(--als-ink-muted); font-size: 12px !important; white-space: nowrap; }
 .als-tab .als-icon { width: 15px; height: 15px; }
 .als-tab:hover { color: inherit; }
@@ -90,7 +91,7 @@
 .als-live-result { margin-bottom: 12px; }
 @keyframes als-turn { to { transform: rotate(360deg); } }
 .als-panel { display: flex; flex-direction: column; min-width: 0; gap: 20px; padding-top: 12px; }
-.als-overview { display: flex; flex-direction: column; gap: 8px; padding: 16px; background: var(--als-paper-raised); border-radius: var(--als-radius-page); }
+.als-overview { display: flex; flex-direction: column; gap: 12px; padding: 8px 2px 0; }
 .als-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .als-eyebrow { color: var(--als-ink-muted); font-size: 11px; letter-spacing: .08em; }
 .als-state-badge { padding: 3px 8px; border-radius: 4px; background: var(--als-bookmark-wash); font-size: 11px; font-weight: 500; }
@@ -102,7 +103,7 @@
 .als-token-count { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .als-token-threshold { margin-top: -8px !important; }
 .als-scope { padding-block: 8px; }
-.als-scope-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.als-scope-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 15px; }
 .als-range-ribbon { display: flex; gap: 4px; height: 8px; margin: 8px 0 12px; overflow: hidden; border-radius: 4px; }
 .als-range-old { flex: 1; background: color-mix(in srgb, var(--als-bookmark) 28%, transparent); border-radius: 4px; }
 .als-range-hidden { flex: 1; background: var(--als-control-line); border-radius: 4px; }
@@ -127,7 +128,21 @@
 .als-settings .als-compact { width: 100%; }
 .als-action-hint { font-size: 11px; text-align: center; margin-top: -4px !important; }
 .als-settings .als-rebuild { width: 100%; border-color: var(--als-bookmark); }
-.als-last-section { display: flex; flex-direction: column; gap: 8px; padding-inline: 4px; }
+.als-overview .als-state-badge { align-self: flex-start; color: var(--als-ink-secondary); background: none; padding: 0; font-size: 13px; }
+.als-overview .als-chat-title { font-size: clamp(22px, 7cqi, 30px); line-height: 1.35; }
+.als-scope-description, .als-memory-result .als-summary-result { color: var(--als-ink-secondary); font-size: 14px; line-height: 1.7; }
+.als-overview .als-scope { padding-block: 4px; }
+.als-overview .als-primary:not(:disabled) { display: flex; justify-content: space-between; width: 100%; min-height: 46px; padding-inline: 16px; color: #18221e; background: color-mix(in srgb, var(--als-bookmark) 58%, #dce8dd); border-color: transparent; }
+.als-overview .als-primary:not(:disabled):hover { background: color-mix(in srgb, var(--als-bookmark) 48%, #dce8dd); }
+.als-memory-result { display: grid; gap: 14px; border-top: 1px solid var(--als-rule); padding-top: 14px; }
+.als-memory-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; font-size: 16px; line-height: 1.8; }
+.als-memory-links, .als-empty-memory { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; border-top: 1px solid var(--als-rule); }
+.als-memory-links:not(:has(> button:not([hidden]))), .als-action-context:empty, .als-summary-result:empty { display: none; }
+.als-empty-memory { font-size: 14px; }
+.als-empty-memory span { color: var(--als-ink-muted); }
+.als-memory-links .als-text-button { min-height: 40px; }
+.als-back-settings, .als-custom-template { align-self: start; }
+.als-recovery-actions > div:has(> button[hidden]) { display: none; }
 .als-last-operation { font-size: 12px; line-height: 1.7; }
 .als-settings .als-text-button, .als-settings .als-icon-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; background: transparent; border: 0; border-radius: 4px; color: var(--als-ink-secondary); padding: 4px 8px; min-height: 40px; min-width: 40px; font-size: 12px; white-space: nowrap; text-shadow: none; }
 .als-settings .als-text-button:not(:disabled):hover, .als-settings .als-icon-button:not(:disabled):hover { background: var(--als-paper-inset); color: inherit; }
@@ -242,7 +257,6 @@ body.als-send-locked :is(#send_but, #option_continue, #option_regenerate, .swipe
 .als-launcher-mascot { width: 60px; height: 60px; }
 .als-launcher-label { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; font-weight: 500; }
 .als-launcher-caption { display: flex; align-items: baseline; gap: 4px; }
-.als-float-modes { display: flex; flex-wrap: wrap; gap: 4px; }
 .als-float-mode { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 8px; background: var(--als-paper-inset); color: var(--als-ink-muted); font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap; }
 .als-float-mode::before { content: ""; width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; border: 1px solid currentColor; }
 .als-float-mode[data-state="on"] { background: var(--als-bookmark-wash); color: var(--als-ink); }
@@ -268,7 +282,6 @@ body.als-send-locked :is(#send_but, #option_continue, #option_regenerate, .swipe
 .als-settings.als-floating { position: fixed; z-index: 2147483646; display: flex; flex-direction: column; margin: 0; padding: 0; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); min-width: min(300px, calc(100vw - 24px)); min-height: min(280px, calc(100dvh - 24px)); border: 1px solid var(--als-control-line); border-radius: 14px; background: var(--als-paper); color: var(--als-ink); overflow: hidden; resize: both; }
 .als-floating-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 4px; padding: 4px 8px 8px; border-bottom: 1px solid var(--als-rule); flex-shrink: 0; }
 .als-floating-title { flex: 1; min-width: 0; }
-.als-floating-modes { padding: 0 4px; }
 .als-floating-title .als-floating-grip { width: 100%; }
 .als-floating-grip { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; min-height: 40px; padding: 2px 4px; border: 0; background: transparent; color: inherit; text-align: left; cursor: grab !important; touch-action: none; font-size: 13px !important; font-weight: 600 !important; }
 .als-floating-grip:active { cursor: grabbing !important; }
@@ -278,7 +291,6 @@ body.als-send-locked :is(#send_but, #option_continue, #option_regenerate, .swipe
 .als-floating > .inline-drawer > .inline-drawer-content { display: flex !important; flex-direction: column; flex: 1; min-height: 0; padding: 0 16px 12px; overflow-y: auto; overscroll-behavior: contain; }
 .als-floating .als-open-floating { display: none; }
 .als-floating .als-reading { max-height: none; overflow: visible; }
-.als-floating .als-topline { margin-top: 4px; }
 .als-dock-placeholder { box-sizing: border-box; width: 100%; min-width: 0; margin-bottom: 5px; font-size: 12px; }
 .als-dock-placeholder[hidden] { display: none; }
 /* This button lives outside .als-settings while the panel is in document.body.
@@ -294,7 +306,7 @@ body.als-send-locked :is(#send_but, #option_continue, #option_regenerate, .swipe
 @container als-panel (max-width: 360px) {
     .als-tab { gap: 4px; }
     .als-tab .als-icon { display: none; }
-    .als-overview { padding: 12px; }
+    .als-overview { padding-inline: 0; }
     .als-directory-tools { grid-template-columns: minmax(0, 1fr); }
     .als-disclosure-note { display: none; }
     .als-model-state { flex-wrap: wrap; }
