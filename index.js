@@ -20,7 +20,7 @@ import { createSummaryJobStore, generateSummaryJob, summaryConnectionSignature }
 
 const MODULE_NAME = 'auto_large_summary';
 const ENTRY_MARKER = 'auto_large_summary';
-const EXTENSION_VERSION = '1.6.1';
+const EXTENSION_VERSION = '1.6.2';
 const SECONDARY_MAX_TOKENS = 65536;
 const SUMMARY_INJECTION_ID = 'meow_large_summary_instruction';
 
@@ -187,12 +187,63 @@ function saveSummaryJob(job) {
 function clearSummaryJob(archiveId, { committed = false } = {}) {
     try { summaryJobStore.remove(archiveId); }
     catch {
-        if (!committed) { notify('warning', '无法删除本地进度，请检查浏览器存储后重试。'); return false; }
+        if (!committed) {
+            const message = '无法删除本地进度，请检查浏览器存储后重试。';
+            setStatus(message);
+            notify('warning', message);
+            return false;
+        }
     }
     // The saved operation also carries the job id, so stale browser data can
     // never regenerate a completed task after reload, even if removal failed.
     summaryJobs.set(archiveId, null);
     return true;
+}
+
+async function discardSummaryProgress(archiveId, expectedJob) {
+    const context = getContext();
+    const archive = context?.chatMetadata?.[MODULE_NAME];
+    if (!archiveId || archive?.archiveId !== archiveId || !expectedJob || summaryJob(archiveId) !== expectedJob) {
+        setStatus('聊天或总结任务已变化，请重新选择要放弃的进度。');
+        return false;
+    }
+    if (!settings.enabled || sendLockDepth || runInProgress || thresholdCheckInProgress || archiveEditInProgress) {
+        setStatus('当前操作尚未结束，请稍后再放弃进度。');
+        return false;
+    }
+    const bookName = settings.worldBookName;
+    archiveEditInProgress = true;
+    lockSending();
+    try {
+        if (archive.pendingSummarySave) {
+            setStatus('正在确认上次总结是否已保存…');
+            const data = await prepareWorldBook(context, bookName, { create: false, readOnly: true });
+            const live = getContext();
+            if (!settings.enabled || settings.worldBookName !== bookName || live?.chat !== context.chat
+                || live?.chatMetadata?.[MODULE_NAME] !== archive || summaryJob(archiveId) !== expectedJob) {
+                throw new Error('聊天、世界书或总结任务已变化，请重新确认。');
+            }
+            const entry = listOwnedEntries(data).find(item => entryMetadata(item)?.archiveId === archiveId
+                && entryMetadata(item)?.cardKey === archive.cardKey) ?? null;
+            reconcileArchiveMetadata(archive, entry);
+            currentSummaryEntry = entry;
+            await context.saveMetadata?.();
+        }
+        if (getContext()?.chat !== context.chat || getContext()?.chatMetadata?.[MODULE_NAME] !== archive
+            || settings.worldBookName !== bookName || !settings.enabled) throw new Error('聊天或设置已变化，请重新确认。');
+        if (!clearSummaryJob(archiveId)) return false;
+        const draft = incompleteResults.get(archiveId);
+        setStatus(`已放弃本次进度。${draft ? '未完成正文仍可在下方复制或删除。' : '现在可以重新总结。'}`);
+        return true;
+    } catch (error) {
+        const message = `放弃进度未完成：${error.message}`;
+        setStatus(message);
+        notify('warning', message);
+        return false;
+    } finally {
+        archiveEditInProgress = false;
+        unlockSending();
+    }
 }
 
 async function resumeSummaryJob() {
@@ -4304,12 +4355,27 @@ async function renderSettings() {
     ui.querySelector('.als-retain-memory').addEventListener('click', () => void retainCurrentMemory());
     ui.querySelector('.als-cancel').addEventListener('click', cancelCurrentTask);
     ui.querySelector('.als-resume').addEventListener('click', () => void resumeSummaryJob());
+    const discardDialog = ui.querySelector('.als-discard-dialog');
+    let discardTarget = null;
     ui.querySelector('.als-discard-progress').addEventListener('click', () => {
-        if (sendLockDepth) return;
-        const id = getContext()?.chatMetadata?.[MODULE_NAME]?.archiveId;
-        if (id && window.confirm('放弃这次总结的进度？已保存到世界书的总结与原文保持不变。')) {
-            if (clearSummaryJob(id)) { setStatus('已放弃进度，可重新总结。'); syncActionState(); }
-        }
+        if (sendLockDepth || discardDialog.open) return;
+        const archiveId = getContext()?.chatMetadata?.[MODULE_NAME]?.archiveId;
+        const job = summaryJob(archiveId);
+        if (!job) return;
+        discardTarget = { archiveId, job };
+        const completed = job.steps?.length ?? 0;
+        discardDialog.querySelector('.als-discard-description').textContent = job.invalid
+            ? '将清除当前聊天无法读取的本地总结进度。'
+            : `将清除当前聊天这次任务的本地进度，包含 ${completed} 次已完成的生成${job.result ? '和待保存的结果' : ''}。`;
+        discardDialog.showModal();
+    });
+    discardDialog.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
+    discardDialog.addEventListener('close', () => { discardTarget = null; });
+    discardDialog.querySelector('.als-discard-cancel').addEventListener('click', () => discardDialog.close());
+    discardDialog.querySelector('.als-discard-confirm').addEventListener('click', () => {
+        const target = discardTarget;
+        discardDialog.close();
+        if (target) void discardSummaryProgress(target.archiveId, target.job);
     });
     ui.querySelector('.als-incomplete-copy').addEventListener('click', async () => {
         const result = incompleteResults.get(getContext()?.chatMetadata?.[MODULE_NAME]?.archiveId);

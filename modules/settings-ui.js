@@ -190,6 +190,14 @@ export function settingsMarkup(version) {
             </div>
           </div>
 
+          <dialog class="als-discard-dialog" aria-labelledby="als-discard-title" aria-describedby="als-discard-description">
+            <div class="als-discard-content">
+              <h3 id="als-discard-title">放弃本次总结进度？</h3>
+              <p class="als-help als-discard-description" id="als-discard-description"></p>
+              <p class="als-help">已经保存到世界书的总结会保留。下次总结需要重新处理这次任务的资料。</p>
+              <div class="als-actions"><button type="button" class="menu_button als-discard-cancel" autofocus>取消</button><button type="button" class="menu_button als-danger als-discard-confirm">确认放弃</button></div>
+            </div>
+          </dialog>
           <dialog class="als-compress-dialog" aria-labelledby="als-compress-title" aria-describedby="als-compress-description">
             <form class="als-compress-form" method="dialog">
               <h3 id="als-compress-title">压缩大总结</h3>

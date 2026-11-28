@@ -108,7 +108,7 @@
 .als-settings-summary dt { color: var(--als-ink-muted); }
 .als-settings-summary dd { text-align: right; overflow-wrap: anywhere; }
 .als-gemini-home { display: grid; gap: 8px; border-top: 1px solid var(--als-rule); margin-top: 8px; padding-top: 8px; }
-.als-settings .als-compress-dialog {
+.als-settings :is(.als-compress-dialog, .als-discard-dialog) {
     width: min(420px, calc(100vw - 32px));
     max-height: calc(100dvh - 32px);
     box-sizing: border-box;
@@ -120,9 +120,9 @@
     background: color-mix(in srgb, var(--als-paper), Canvas 20%);
     box-shadow: 0 12px 36px #0006;
 }
-.als-compress-dialog::backdrop { background: #0008; }
-.als-compress-form { display: grid; gap: 12px; }
-.als-compress-form :is(h3, p) { margin: 0; }
+:is(.als-compress-dialog, .als-discard-dialog)::backdrop { background: #0008; }
+:is(.als-compress-form, .als-discard-content) { display: grid; gap: 12px; }
+:is(.als-compress-form, .als-discard-content) :is(h3, p) { margin: 0; }
 .als-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .als-eyebrow { color: var(--als-ink-muted); font-size: 11px; letter-spacing: .08em; }
 .als-chat-title { font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif; overflow-wrap: anywhere; }

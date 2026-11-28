@@ -3904,6 +3904,106 @@ test('segmented stop survives reload, resumes only incomplete steps, and commits
     assert.equal(bookEntry(g).extensions.auto_large_summary.records.length, 1);
 });
 
+test('discarding a reloaded interrupted job clears stored progress without model calls or changing saved memory or visibility', async () => {
+    const storage = new Map();
+    const f = await fixture({ keepRecent: 2 }, storage);
+    prepareLongSummary(f);
+    f.api.evaluate(`__fixtures.calls = 0; requestMainApiSummary = async () => {
+        if (++__fixtures.calls === 2) { cancelCurrentTask(); return 'unfinished'; }
+        return 'first complete segment';
+    };`);
+    await f.api.runLargeSummary({ manual: true });
+    const g = await fixture({ keepRecent: 2 }, storage);
+    prepareLongSummary(g);
+    g.context.chatMetadata = structuredClone(f.context.chatMetadata);
+    const before = JSON.stringify(g.context.chat);
+    g.api.evaluate(`requestMainApiSummary = async () => { throw new Error('discard must never call the model'); };`);
+    assert.equal(g.api.evaluate('summaryJob("archive-a").steps.length'), 1);
+    assert.equal(await g.api.evaluate('discardSummaryProgress("archive-a", summaryJob("archive-a"))'), true);
+    assert.equal(g.api.evaluate('summaryJob("archive-a")'), null);
+    assert.equal(g.writes.length, 0);
+    assert.equal(g.executed.length, 0);
+    assert.equal(JSON.stringify(g.context.chat), before);
+    assert.equal(g.api.state().sendLockDepth, 0);
+    assert.equal(g.api.evaluate('canSummarize(getContext(), true)'), true);
+    const h = await fixture({}, storage);
+    assert.equal(h.api.evaluate('summaryJob("archive-a")'), null);
+});
+
+test('discard reconciles a failed save with the actual worldbook and allows a fresh summary', async () => {
+    const f = await fixture();
+    f.prepareSummary();
+    f.context.saveWorldInfo = async () => { throw new Error('write unavailable'); };
+    await f.api.runLargeSummary();
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingSummarySave, true);
+    assert.equal(f.api.evaluate('summaryJob("archive-a").result.length > 0'), true);
+    assert.equal(await f.api.evaluate('discardSummaryProgress("archive-a", summaryJob("archive-a"))'), true);
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingSummarySave, undefined);
+    assert.equal(f.context.chatMetadata.auto_large_summary.lastSummarizedThrough, -1);
+    assert.equal(f.api.evaluate('summaryJob("archive-a")'), null);
+    assert.equal(f.api.evaluate('canSummarize(getContext(), true)'), true);
+    assert.equal(f.api.state().sendLockDepth, 0);
+    assert.equal(f.executed.length, 0);
+});
+
+test('discard retains progress and explains the failure if browser deletion does not take effect', async () => {
+    const f = await fixture({ keepRecent: 2 });
+    prepareLongSummary(f);
+    f.api.evaluate(`requestMainApiSummary = async () => { cancelCurrentTask(); return 'unfinished'; };`);
+    await f.api.runLargeSummary({ manual: true });
+    const job = f.api.evaluate('summaryJob("archive-a")');
+    f.sandbox.localStorage.removeItem = () => {};
+    assert.equal(await f.api.evaluate('discardSummaryProgress("archive-a", summaryJob("archive-a"))'), false);
+    assert.equal(f.api.evaluate('summaryJob("archive-a")'), job);
+    assert.match(f.controls.get('.als-status').textContent, /无法删除本地进度/);
+    assert.equal(f.api.state().sendLockDepth, 0);
+});
+
+test('discarding a failed new save preserves the previous saved summary and its hidden floors', async () => {
+    const f = await fixture();
+    f.prepareSummary();
+    assert.equal(await f.api.runLargeSummary(), true);
+    const previous = JSON.stringify(f.sandbox.__fixtures.book());
+    f.context.chat.push(...Array.from({ length: 8 }, (_, i) => ({ mes: `后续 ${i}`, is_system: false })));
+    const visibility = f.context.chat.map(message => message.is_system);
+    f.context.saveWorldInfo = async () => { throw new Error('new write unavailable'); };
+    await f.api.runLargeSummary({ manual: true });
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingSummarySave, true);
+    const writes = f.writes.length;
+    assert.equal(await f.api.evaluate('discardSummaryProgress("archive-a", summaryJob("archive-a"))'), true);
+    assert.equal(JSON.stringify(f.sandbox.__fixtures.book()), previous);
+    assert.deepEqual(f.context.chat.map(message => message.is_system), visibility);
+    assert.equal(f.writes.length, writes);
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingSummarySave, undefined);
+    assert.equal(f.context.chatMetadata.auto_large_summary.round, 1);
+});
+
+test('discard retains the pending result when its uncertain worldbook write cannot be checked', async () => {
+    const f = await fixture();
+    f.prepareSummary();
+    f.context.saveWorldInfo = async () => { throw new Error('write unavailable'); };
+    await f.api.runLargeSummary();
+    const job = f.api.evaluate('summaryJob("archive-a")');
+    f.context.updateWorldInfoList = async () => { throw new Error('book unavailable'); };
+    assert.equal(await f.api.evaluate('discardSummaryProgress("archive-a", summaryJob("archive-a"))'), false);
+    assert.equal(f.api.evaluate('summaryJob("archive-a")'), job);
+    assert.equal(f.context.chatMetadata.auto_large_summary.pendingSummarySave, true);
+    assert.match(f.controls.get('.als-status').textContent, /book unavailable/);
+    assert.equal(f.api.state().sendLockDepth, 0);
+});
+
+test('discard refuses the old confirmation after switching to another chat', async () => {
+    const f = await fixture({ keepRecent: 2 });
+    prepareLongSummary(f);
+    f.api.evaluate(`requestMainApiSummary = async () => { cancelCurrentTask(); return 'unfinished'; };`);
+    await f.api.runLargeSummary({ manual: true });
+    const job = f.api.evaluate('summaryJob("archive-a")');
+    f.setContext({ ...f.context, chatId: 'other', chatMetadata: { auto_large_summary: { archiveId: 'archive-b' } } });
+    assert.equal(await f.api.evaluate('discardSummaryProgress("archive-a", summaryJob("archive-a"))'), false);
+    assert.equal(f.api.evaluate('summaryJob("archive-a")'), job);
+    assert.match(f.controls.get('.als-status').textContent, /聊天或总结任务已变化/);
+});
+
 for (const change of ['source', 'visibility', 'settings', 'worldbook']) test(`stopped summary rejects changed ${change} without new model calls`, async () => {
     const f = await fixture({ keepRecent: 2 });
     prepareLongSummary(f);

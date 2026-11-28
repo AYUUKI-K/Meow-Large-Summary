@@ -29,7 +29,11 @@ export function createSummaryJobStore(storage = () => globalThis.localStorage) {
             return job;
         },
         write(job) { storage().setItem(key(job.archiveId), JSON.stringify(job)); },
-        remove(id) { storage().removeItem(key(id)); },
+        remove(id) {
+            const target = storage();
+            target.removeItem(key(id));
+            if (target.getItem(key(id)) !== null) throw new Error('浏览器仍保留这次总结的进度。');
+        },
     };
 }
 
